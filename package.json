@@ -1,6 +1,6 @@
 {
   "name": "@campfhir/bored-logs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Structured PostgreSQL-backed logging for Next.js — custom logger, adapter architecture, React UI components, and DB migration.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
