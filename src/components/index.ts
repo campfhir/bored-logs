@@ -1,3 +1,13 @@
+/**
+ * Public entrypoint for the package's React UI components for rendering and
+ * filtering logs: `LogTable` (with its `LogTableRow`, `LogTableRowGroup`, and
+ * `LogTableRowExpanded` subcomponents), `LogCard`, `LogSearchBar` (with
+ * `LogSearchSyntaxHelp`), `LogLevelFilter`, and `PurgeLogsDialog`, along with
+ * their prop types.
+ *
+ * @module
+ */
+
 export { LogTable, LogTableRow, LogTableRowGroup, LogTableRowExpanded, formatTimestamp } from "./log-table";
 export { LogCard } from "./log-card";
 export { default as PurgeLogsDialog } from "./purge-logs-dialog";

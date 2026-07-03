@@ -25,8 +25,10 @@
 import { Err } from "../types";
 import type { Result } from "../types";
 
+/** Comparison operator applied by a {@link LogQueryToken}. */
 export type LogQueryOperator = "contains" | "=" | ">" | ">=" | "<" | "<=";
 
+/** A single parsed query term: a key/operator/value comparison, optionally negated. */
 export interface LogQueryToken {
   key: string; // "message" when no key given
   operator: LogQueryOperator;

@@ -17,6 +17,7 @@ import { formatTimestamp, type ExtraColumn } from "./log-table";
 /** A meta field shown on the card — identical shape to LogTable's ExtraColumn. */
 export type LogCardField = ExtraColumn;
 
+/** Props for {@link LogCard}. */
 export type LogCardProps = {
   log: LogRow;
   /** Meta fields to surface as labelled rows. Defaults to none. */
@@ -31,6 +32,13 @@ export type LogCardProps = {
   expandedClassName?: string;
 };
 
+/**
+ * Renders a single log entry as a style-less `<article>` card for narrow or
+ * mobile layouts where a table doesn't fit. Shows the level, timestamp, and
+ * message, optionally surfaces meta `fields` as a labelled list, and has a
+ * built-in expand/collapse detail panel (defaulting to a JSON dump of
+ * `log.meta`).
+ */
 export function LogCard({
   log,
   fields = [],

@@ -3,11 +3,13 @@
 import { createContext, useContext, useState, type ReactNode, type ReactElement } from "react";
 import type { LogRow } from "../logger/adapter";
 
+/** The active sort column and direction for {@link LogTable}. */
 export type SortState = {
   column: string;
   direction: "asc" | "desc";
 };
 
+/** Configuration for an additional column beyond the built-in timestamp/level/message columns. */
 export type ExtraColumn = {
   /** Unique column identifier, also used as the default header label. */
   key: string;
@@ -40,6 +42,10 @@ const LogTableContext = createContext<LogTableCtx>({
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Formats an ISO timestamp for display via `toLocaleString`. Returns `"—"` for
+ * a null timestamp and the original string if it can't be parsed as a date.
+ */
 export function formatTimestamp(ts: string | null): string {
   if (!ts) return "—";
   const d = new Date(ts);
@@ -94,6 +100,7 @@ function SortableHeader({
 // LogTable
 // ---------------------------------------------------------------------------
 
+/** Props for {@link LogTable}. */
 export type LogTableProps = {
   className?: string;
   theadClassName?: string;
@@ -110,6 +117,12 @@ export type LogTableProps = {
   children?: ReactNode;
 };
 
+/**
+ * Renders a style-less `<table>` with built-in timestamp/level/message headers
+ * plus any `extraColumns`, an optional `<tfoot>`, and controlled, clickable
+ * sortable headers. Log rows are composed as children using {@link LogTableRow}
+ * and related primitives, which share the column config via context.
+ */
 export function LogTable({
   className,
   theadClassName,
@@ -164,12 +177,19 @@ export function LogTable({
 // LogTableRow
 // ---------------------------------------------------------------------------
 
+/** Props for {@link LogTableRow}. */
 export type LogTableRowProps = {
   log: LogRow;
   onClick?: (log: LogRow) => void;
   className?: string;
 };
 
+/**
+ * Renders a single log entry as a `<tr>` with the built-in timestamp, level,
+ * and message cells plus any `extraColumns` from the surrounding
+ * {@link LogTable}. Optionally calls `onClick` with the log when the row is
+ * clicked.
+ */
 export function LogTableRow({ log, onClick, className }: LogTableRowProps): ReactElement {
   const { extraColumns } = useContext(LogTableContext);
 
@@ -200,6 +220,7 @@ export function LogTableRow({ log, onClick, className }: LogTableRowProps): Reac
 // LogTableRowGroup — convenience wrapper with built-in expand/collapse state
 // ---------------------------------------------------------------------------
 
+/** Props for {@link LogTableRowGroup}. */
 export type LogTableRowGroupProps = {
   log: LogRow;
   className?: string;
@@ -208,6 +229,12 @@ export type LogTableRowGroupProps = {
   children?: ReactNode;
 };
 
+/**
+ * A convenience wrapper that pairs a {@link LogTableRow} with a
+ * {@link LogTableRowExpanded} panel and manages the expand/collapse state
+ * internally — clicking the row toggles the detail panel, which defaults to a
+ * JSON dump of `log.meta`.
+ */
 export function LogTableRowGroup({ log, className, expandedClassName, children }: LogTableRowGroupProps): ReactElement {
   const [open, setOpen] = useState(false);
 
@@ -225,6 +252,7 @@ export function LogTableRowGroup({ log, className, expandedClassName, children }
 // LogTableRowExpanded
 // ---------------------------------------------------------------------------
 
+/** Props for {@link LogTableRowExpanded}. */
 export type LogTableRowExpandedProps = {
   children: ReactNode;
   className?: string;
@@ -232,6 +260,11 @@ export type LogTableRowExpandedProps = {
   open?: boolean;
 };
 
+/**
+ * Renders an expanded detail `<tr>` whose single cell spans all columns of the
+ * surrounding {@link LogTable}. Returns nothing when `open` is false, letting
+ * the consumer control visibility.
+ */
 export function LogTableRowExpanded({ children, className, open = true }: LogTableRowExpandedProps): ReactElement | null {
   const { totalColumns } = useContext(LogTableContext);
 

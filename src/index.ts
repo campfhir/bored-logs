@@ -1,3 +1,13 @@
+/**
+ * @campfhir/bored-logs — structured PostgreSQL-backed logging for Next.js.
+ *
+ * Main entry: the {@link createLogger} factory, adapter interfaces and record
+ * types, the built-in {@link ConsoleAdapter}, the {@link secure} value wrapper,
+ * `Result`/`Err` helpers, and the log-query string parser.
+ *
+ * @module
+ */
+
 // ---------------------------------------------------------------------------
 // @campfhir/bored-logs — main entry point
 // ---------------------------------------------------------------------------

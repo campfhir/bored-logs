@@ -1,3 +1,12 @@
+/**
+ * Initial Kysely migration for the PostgreSQL log adapter.
+ *
+ * Provides {@link up} and {@link down}: `up` creates the `logs`, `log_attr`,
+ * and `log_attr_blob` tables along with their timestamp, level, and attribute
+ * indexes; `down` drops those indexes and tables.
+ *
+ * @module
+ */
 import { Kysely } from "kysely";
 
 /**
@@ -81,6 +90,11 @@ export async function up(db: Kysely<any>): Promise<void> {
     .execute();
 }
 
+/**
+ * Reverses {@link up} by dropping the logging indexes and the `log_attr_blob`,
+ * `log_attr`, and `logs` tables (in FK-safe order). Safe to call if they do
+ * not exist.
+ */
 export async function down(db: Kysely<any>): Promise<void> {
   await db.schema.dropIndex("log_timestamp_idx").ifExists().execute();
   await db.schema.dropIndex("attr_log_timestamp_idx").ifExists().execute();

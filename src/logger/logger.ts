@@ -6,6 +6,7 @@ import { type Secure, type TemplateAttrs, type ValueSerializer, interpolate, isS
 // LoggerInstance
 // ---------------------------------------------------------------------------
 
+/** Construction options for a {@link LoggerInstance} / {@link createLogger}. */
 export type LoggerOptions = {
   /** Minimum level to pass to adapters. Defaults to "debug". */
   level?: string;
@@ -26,6 +27,7 @@ export type LoggerOptions = {
 // Process event hooks
 // ---------------------------------------------------------------------------
 
+/** Process lifecycle events that {@link LoggerInstance.on} can hook. */
 export type ProcessEvent =
   | "SIGINT"
   | "SIGTERM"
@@ -41,6 +43,11 @@ type ProcessEventHandlers = {
   unhandledRejection: (reason: unknown) => void | Promise<void>;
 };
 
+/**
+ * A logger. Buffers records until an adapter is registered, then dispatches
+ * each interpolated {@link LogRecord} to every adapter that passes the level
+ * gate. Prefer {@link createLogger} to construct one.
+ */
 export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_LEVELS> {
   private readonly _adapters: LogAdapter[] = [];
   private _buffer: LogRecord[] = [];
@@ -62,16 +69,19 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 
   // ── Level control ───────────────────────────────────────────────────────
 
+  /** The current minimum emit level. */
   get level(): string {
     return this._level;
   }
 
+  /** Set the minimum emit level; records below it are dropped. */
   set level(value: string) {
     this._level = value;
   }
 
   // ── Adapter management ──────────────────────────────────────────────────
 
+  /** Register an adapter, sharing the level map and replaying any buffered records to it. */
   addAdapter(adapter: LogAdapter): void {
     // Share the current level map (built-ins + any custom levels) so the
     // adapter's own filtering and query defaults recognise custom levels.
@@ -90,6 +100,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     }
   }
 
+  /** The registered adapters, in registration order. */
   get adapters(): readonly LogAdapter[] {
     return this._adapters;
   }
@@ -133,6 +144,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 
   // ── Core write ──────────────────────────────────────────────────────────
 
+  /** Emit a record at the given level, interpolating `{key}` placeholders from `attrs`. */
   log<T extends string | Secure<string>>(
     level: (string & {}) | (keyof TLevels & string),
     template: T,
@@ -183,6 +195,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 
   // ── Named level methods ─────────────────────────────────────────────────
 
+  /** Log at the "critical" level. */
   critical<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -190,6 +203,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("critical", template, ...args);
   }
 
+  /** Log at the "error" level. */
   error<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -197,6 +211,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("error", template, ...args);
   }
 
+  /** Log at the "warn" level. */
   warn<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -204,6 +219,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("warn", template, ...args);
   }
 
+  /** Log at the "info" level. */
   info<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -211,6 +227,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("info", template, ...args);
   }
 
+  /** Log at the "http" level. */
   http<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -218,6 +235,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("http", template, ...args);
   }
 
+  /** Log at the "verbose" level. */
   verbose<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -225,6 +243,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("verbose", template, ...args);
   }
 
+  /** Log at the "cache" level. */
   cache<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -232,6 +251,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("cache", template, ...args);
   }
 
+  /** Log at the "request" level. */
   request<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -239,6 +259,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("request", template, ...args);
   }
 
+  /** Log at the "response" level. */
   response<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -246,6 +267,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("response", template, ...args);
   }
 
+  /** Log at the "sql" level. */
   sql<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -253,6 +275,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     this.log("sql", template, ...args);
   }
 
+  /** Log at the "debug" level. */
   debug<T extends string | Secure<string>>(
     template: T,
     ...args: TemplateAttrs<T>
@@ -262,12 +285,14 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
 
+  /** Flush all adapters that implement `flush`. */
   async flush(): Promise<void> {
     await Promise.all(
       this._adapters.filter((a) => a.flush != null).map((a) => a.flush!()),
     );
   }
 
+  /** Close all adapters that implement `close`. */
   async close(): Promise<void> {
     await Promise.all(
       this._adapters.filter((a) => a.close != null).map((a) => a.close!()),
@@ -328,6 +353,7 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 export type Logger<TLevels extends Record<string, number> = typeof LOG_LEVELS> =
   LoggerInstance<TLevels>;
 
+/** Create a standalone {@link LoggerInstance}, optionally registering custom `levels`. */
 export function createLogger<TExtra extends Record<string, number> = Record<never, never>>(
   opts?: LoggerOptions & { levels?: TExtra },
 ): LoggerInstance<typeof LOG_LEVELS & TExtra> {

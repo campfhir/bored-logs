@@ -2,10 +2,13 @@
 // Secure wrapper — marks a value or entire message template as encrypted.
 // ---------------------------------------------------------------------------
 
+/** A value or message template marked as secure (to be encrypted / redacted). */
 export type Secure<T> = { readonly _secure: true; readonly value: T };
 
+/** Wrap a value as {@link Secure} so it is encrypted at rest and shown as `[secure]`. */
 export const secure = <T>(value: T): Secure<T> => ({ _secure: true, value });
 
+/** Type guard: true when the value is a {@link Secure} wrapper. */
 export const isSecure = (v: unknown): v is Secure<unknown> =>
   typeof v === "object" &&
   v !== null &&
@@ -25,6 +28,7 @@ type UnwrapTemplate<T> = T extends Secure<infer S extends string>
 type ExtractKeys<T extends string> =
   T extends `${string}{${infer Key}}${infer Rest}` ? Key | ExtractKeys<Rest> : never;
 
+/** Union of the `{key}` placeholder names in a template string (unwrapping {@link Secure}). */
 export type ExtractTemplateKeys<T extends string | Secure<string>> = ExtractKeys<
   UnwrapTemplate<T>
 >;
@@ -34,6 +38,7 @@ export type ExtractTemplateKeys<T extends string | Secure<string>> = ExtractKeys
 // template contains {key} placeholders; optional otherwise.
 // ---------------------------------------------------------------------------
 
+/** The `attrs` argument tuple for a template: required and typed when the template has `{key}` placeholders, optional otherwise. */
 export type TemplateAttrs<T extends string | Secure<string>> =
   [ExtractTemplateKeys<T>] extends [never]
     ? [attrs?: Record<string, unknown>]
@@ -46,13 +51,16 @@ export type TemplateAttrs<T extends string | Secure<string>> =
 // serializer via LoggerOptions.serializeValue to override.
 // ---------------------------------------------------------------------------
 
+/** Converts an interpolated attribute value into its string representation. */
 export type ValueSerializer = (value: unknown) => string;
 
+/** Default {@link ValueSerializer}: `JSON.stringify` for objects, `String()` for primitives. */
 export const defaultSerializer: ValueSerializer = (val) => {
   if (typeof val === "object") return JSON.stringify(val);
   return String(val);
 };
 
+/** Replace `{key}` tokens with serialized `attrs` values; secure values render as `[secure]` and missing keys stay literal. */
 export function interpolate(
   template: string,
   attrs: Record<string, unknown>,

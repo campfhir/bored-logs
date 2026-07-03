@@ -7,6 +7,7 @@ import { isSecure } from "./template";
 // Universal: works in Node.js, browser, and Edge runtimes.
 // ---------------------------------------------------------------------------
 
+/** Construction options for {@link ConsoleAdapter}. */
 export type ConsoleAdapterOptions = {
   /** Minimum level to emit. Defaults to "info". */
   level?: string;
@@ -22,6 +23,10 @@ export type ConsoleAdapterOptions = {
   levels?: Record<string, number>;
 };
 
+/**
+ * Built-in adapter that writes formatted log lines to the console. Works in
+ * Node.js, browser, and Edge runtimes; redacts secure values in the output.
+ */
 export class ConsoleAdapter implements LogAdapter {
   private _level: string;
   private _levels: Record<string, number>;
@@ -35,18 +40,22 @@ export class ConsoleAdapter implements LogAdapter {
     this.showLevel = opts.showLevel ?? true;
   }
 
+  /** The current minimum level this adapter emits. */
   get level(): string {
     return this._level;
   }
 
+  /** Set the minimum level this adapter emits. */
   set level(value: string) {
     this._level = value;
   }
 
+  /** Merge additional level ranks into this adapter's level map. */
   setLevels(levels: Record<string, number>): void {
     Object.assign(this._levels, levels);
   }
 
+  /** Format and print a record via `console.error`/`warn`/`log` per its severity, unless gated out. */
   write(record: LogRecord): void {
     const recordNum = this._levels[record.level.toLowerCase()] ?? this._levels.debug;
     const levelNum = this._levels[this._level.toLowerCase()] ?? this._levels.info;

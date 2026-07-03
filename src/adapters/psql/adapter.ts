@@ -1,3 +1,13 @@
+/**
+ * PostgreSQL log adapter for @campfhir/bored-logs.
+ *
+ * Exposes {@link PostgresAdapter} — a {@link QueryableLogAdapter} backed by
+ * Kysely + `pg` that batches writes, optionally encrypts attribute values,
+ * runs boolean attribute-filter queries, and purges old rows — plus the
+ * {@link createLoggerPool} factory and the Kysely table row types.
+ *
+ * @module
+ */
 import { Kysely, sql } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { Pool } from "pg";
@@ -39,6 +49,10 @@ import { Err } from "../../types";
 // createLoggerPool — pg.Pool with conservative cloud-friendly defaults.
 // ---------------------------------------------------------------------------
 
+/**
+ * Creates a `pg.Pool` with conservative cloud-friendly defaults (small max
+ * connections and short timeouts). Any passed `config` overrides the defaults.
+ */
 export function createLoggerPool(config: PoolConfig = {}): Pool {
   return new Pool({
     max: 2,
@@ -95,14 +109,21 @@ export interface LoggerTables {
   selected_attributes: TempTableSelectedAttributes;
 }
 
+/** A selected row from the `logs` table. */
 export type Log = Selectable<LogTable>;
+/** Shape for inserting a new row into the `logs` table. */
 export type NewLog = Insertable<LogTable>;
+/** Shape for updating an existing `logs` row. */
 export type LogUpdate = Updateable<LogTable>;
 
+/** A selected row from the `log_attr` scalar-attribute table. */
 export type LogAttribute = Selectable<LogAttributeTable>;
+/** Shape for inserting a new row into the `log_attr` table. */
 export type NewLogAttribute = Insertable<LogAttributeTable>;
 
+/** A selected row from the `log_attr_blob` binary-attribute table. */
 export type LogBlobAttribute = Selectable<LogBlobAttributeTable>;
+/** Shape for inserting a new row into the `log_attr_blob` table. */
 export type NewLogBlobAttribute = Insertable<LogBlobAttributeTable>;
 
 // ---------------------------------------------------------------------------
@@ -112,12 +133,21 @@ export type NewLogBlobAttribute = Insertable<LogBlobAttributeTable>;
 type DatabaseNonNullTypes = "string" | "number" | "boolean" | "date" | "json" | "binary";
 type DatabaseNullType = "null";
 
+/**
+ * Serialized attribute map keyed by attribute name — each value carries its
+ * stored string form (or `null`), a database value type, and an optional
+ * encrypted flag.
+ */
 export type KeyValueMapping = {
   [key: string]:
     | { val: string; type: DatabaseNonNullTypes; encrypted?: boolean }
     | { val: null; type: DatabaseNullType; encrypted?: boolean };
 };
 
+/**
+ * A fully materialized log record returned by the internal query path:
+ * metadata plus decoded attributes and the names of any encrypted keys.
+ */
 export type LogEntry = {
   logId: string;
   message: string;
@@ -127,6 +157,7 @@ export type LogEntry = {
   encryptedKeys: string[];
 };
 
+/** Fully-resolved options for the adapter's internal log query builder. */
 export type PostgresQueryOptions = {
   id?: string | null;
   limit?: number;
@@ -266,12 +297,14 @@ function buildFilterExpr(
 // PostgresAdapterOptions
 // ---------------------------------------------------------------------------
 
+/** Whether a named migration's tables are present, as reported by the adapter. */
 export type MigrationStatus = {
   name: string;
   /** True when all tables for this migration are present in the database. */
   applied: boolean;
 };
 
+/** Constructor options for {@link PostgresAdapter}. */
 export type PostgresAdapterOptions = {
   /** Kysely instance. Pass your existing `Kysely<YourDatabase>` directly. */
   db: Kysely<any>;
@@ -386,6 +419,11 @@ function serializeAttrValue(
 // PostgresAdapter
 // ---------------------------------------------------------------------------
 
+/**
+ * A {@link QueryableLogAdapter} backed by Kysely + `pg`. Buffers log records
+ * and flushes them in batches, optionally encrypts attribute values, resolves
+ * boolean attribute-filter queries, and supports bounded and unbounded purges.
+ */
 export class PostgresAdapter implements QueryableLogAdapter {
   private readonly _db: Kysely<LoggerTables>;
   private _level: string;
@@ -420,6 +458,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
   /** Hard ceiling on records deleted per purge() call. */
   private readonly PURGE_MAX = 10_000;
 
+  /** Builds an adapter from the given options and starts the periodic flush timer. */
   constructor(opts: PostgresAdapterOptions) {
     this._db = opts.db;
     this._level = opts.level ?? process.env.LOG_DB_LEVEL ?? "info";
@@ -433,20 +472,24 @@ export class PostgresAdapter implements QueryableLogAdapter {
     this._startFlushTimer();
   }
 
+  /** The minimum level currently written to the database. */
   get level(): string {
     return this._level;
   }
 
+  /** Sets the minimum level written to the database. */
   set level(value: string) {
     this._level = value;
   }
 
+  /** Merges additional custom level ranks into the adapter's level map. */
   setLevels(levels: Record<string, number>): void {
     Object.assign(this._levels, levels);
   }
 
   // ── LogAdapter.write ────────────────────────────────────────────────────
 
+  /** Enqueues a log record for batched writing, dropping records below the configured level. */
   write(record: LogRecord): void {
     const recordNum =
       this._levels[record.level.toLowerCase()] ?? this._levels.debug;
@@ -463,6 +506,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   // ── QueryableLogAdapter.query ───────────────────────────────────────────
 
+  /** Queries stored logs by date range, level, message, and attribute filters, returning matching rows. */
   async query(options: LogQueryOptions): Promise<Result<LogRow[], QueryError>> {
     try {
       const start = options.start
@@ -555,6 +599,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   // ── QueryableLogAdapter.purge ───────────────────────────────────────────
 
+  /** Deletes logs on or before `until` up to a bounded limit (max 10,000); use {@link deepPurge} for unbounded deletes. */
   async purge(until: Date, limit?: number): Promise<Result<number, PurgeError>> {
     if (limit !== undefined && limit > this.PURGE_MAX) {
       return {
@@ -748,10 +793,12 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   // ── LogAdapter lifecycle ────────────────────────────────────────────────
 
+  /** Flushes any queued records to the database immediately. */
   async flush(): Promise<void> {
     await this._flushQueue();
   }
 
+  /** Stops the flush timer and flushes any remaining queued records. */
   async close(): Promise<void> {
     if (this.flushTimer) {
       clearInterval(this.flushTimer);

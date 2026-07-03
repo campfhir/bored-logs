@@ -2,6 +2,7 @@
 
 import type { ReactElement } from "react";
 
+/** Props for {@link PurgeLogsDialog}. */
 type Props = {
   className?: string;
   show: boolean;
@@ -12,6 +13,12 @@ type Props = {
   onCancel: () => void;
 };
 
+/**
+ * A confirmation dialog for deleting all log entries before a chosen date.
+ * Renders a modal `role="dialog"` with a date input and Cancel/Purge buttons
+ * (disabled while `purging`) when `show` is true, and nothing otherwise. It is
+ * controlled — the consumer owns the date value and confirm/cancel handlers.
+ */
 export default function PurgeLogsDialog({
   className,
   show,

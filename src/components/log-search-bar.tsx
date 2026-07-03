@@ -148,6 +148,11 @@ function branchesToExpr(branches: FilterExpr[]): FilterExpr | null {
 // LogSearchSyntaxHelp — standalone, place anywhere in the consumer's layout
 // ---------------------------------------------------------------------------
 
+/**
+ * A standalone reference that renders the search query syntax (operators,
+ * boolean combinators, and grouping) as a definition list. Place it anywhere
+ * in the consumer's layout to document {@link LogSearchBar}'s query language.
+ */
 export function LogSearchSyntaxHelp({ className }: { className?: string }): ReactElement {
   return (
     <span className={className} data-log-search-syntax-help>
@@ -173,6 +178,7 @@ export function LogSearchSyntaxHelp({ className }: { className?: string }): Reac
 // LogSearchBar
 // ---------------------------------------------------------------------------
 
+/** Props for {@link LogSearchBar}. */
 export type LogSearchBarProps = {
   className?: string;
   hidden?: boolean;
@@ -185,6 +191,13 @@ export type LogSearchBarProps = {
   debounceMs?: number;
 };
 
+/**
+ * A style-less search input for building boolean log-query expressions.
+ * Committed terms become removable, editable chips; it offers optional
+ * key/operator/value autocomplete when `logs` are supplied, debounced syntax
+ * and contradiction warnings, and emits the parsed expression tree (or null)
+ * via `onSearch`.
+ */
 export default function LogSearchBar({
   className,
   hidden,

@@ -20,6 +20,7 @@ import { LOG_LEVELS } from "../logger/adapter";
 /** Built-in level names, most-verbose-last, as the default option set. */
 const DEFAULT_LEVELS = Object.keys(LOG_LEVELS);
 
+/** Props for {@link LogLevelFilter}. */
 export type LogLevelFilterProps = {
   /** Selectable level names, in display order. Defaults to the built-in levels. */
   levels?: string[];
@@ -30,6 +31,12 @@ export type LogLevelFilterProps = {
   className?: string;
 };
 
+/**
+ * A controlled, style-less filter control for the log level. Renders a
+ * `role="group"` of toggle buttons (one per level, each carrying `data-level`
+ * and `data-selected` hooks) and calls `onChange` with the next selection —
+ * the array you pass to `query({ levels })`.
+ */
 export default function LogLevelFilter({
   levels = DEFAULT_LEVELS,
   value,

@@ -23,6 +23,11 @@ import type { FilterExpr } from "./parseLogQuery";
 // `logger.addLevels({ audit: 3, silly: 8 })`.
 // ---------------------------------------------------------------------------
 
+/**
+ * Level name → severity rank map (lower rank = more severe). Exposed as an
+ * interface so applications can register custom levels via declaration merging;
+ * merged keys flow into {@link LogLevel} and every level-typed API.
+ */
 export interface LogLevels {
   silent: 0;
   critical: 0;
@@ -64,6 +69,7 @@ export type LogLevel = keyof LogLevels;
 // LogRecord — the entry passed to adapter.write().
 // ---------------------------------------------------------------------------
 
+/** A single log entry passed to {@link LogAdapter.write}. */
 export type LogRecord = {
   /** Log level string (e.g. "info", "error"). */
   level: string;
@@ -84,6 +90,7 @@ export type LogRecord = {
 // LogRow — the query result type returned by QueryableLogAdapter.query().
 // ---------------------------------------------------------------------------
 
+/** A stored log entry as returned by {@link QueryableLogAdapter.query}. */
 export type LogRow = {
   id: string;
   level: string;
@@ -96,6 +103,7 @@ export type LogRow = {
 // AttributeFilter — used in LogQueryOptions and by PostgresAdapter.
 // ---------------------------------------------------------------------------
 
+/** A single attribute comparison applied to a query's `meta` fields. */
 export type AttributeFilter = {
   key: string;
   operator: "contains" | "=" | ">" | ">=" | "<" | "<=";
@@ -127,6 +135,7 @@ export type LogLevelFilter =
   | { level?: never; levels?: LogLevel[]; minLevel?: never }
   | { level?: never; levels?: never; minLevel?: LogLevel };
 
+/** Options accepted by {@link QueryableLogAdapter.query} — time range, message term, paging, sort, level filter, and attribute filters. */
 export type LogQueryOptions = {
   start?: string;
   end?: string;
@@ -151,6 +160,10 @@ export type LogQueryOptions = {
 // Adapter interfaces
 // ---------------------------------------------------------------------------
 
+/**
+ * A log sink. Implementations receive each {@link LogRecord} via `write` and
+ * may optionally support `flush`, `close`, and receiving the logger's level map.
+ */
 export interface LogAdapter {
   write(record: LogRecord): void | Promise<void>;
   flush?(): Promise<void>;
@@ -177,11 +190,13 @@ export type QueryError = "invalid log level" | "failed to query";
 /** Errors returned by QueryableLogAdapter.purge() / PostgresAdapter.deepPurge(). */
 export type PurgeError = "purge limit exceeded" | "failed to purge";
 
+/** A {@link LogAdapter} that can also read back and purge stored records. */
 export interface QueryableLogAdapter extends LogAdapter {
   query(options: LogQueryOptions): AsyncResult<LogRow[], QueryError>;
   purge(until: Date, limit?: number): AsyncResult<number, PurgeError>;
 }
 
+/** Type guard: true when the adapter implements `query` and `purge`. */
 export function isQueryable(adapter: LogAdapter): adapter is QueryableLogAdapter {
   return (
     typeof (adapter as QueryableLogAdapter).query === "function" &&
@@ -193,13 +208,16 @@ export function isQueryable(adapter: LogAdapter): adapter is QueryableLogAdapter
 // Encryption helpers — used by PostgresAdapter.
 // ---------------------------------------------------------------------------
 
+/** Encrypts a plaintext string into a ciphertext buffer for secure attribute storage. */
 export type EncryptFn = (plaintext: string) => Buffer;
+/** Decrypts a stored ciphertext string back into plaintext. */
 export type DecryptFn = (ciphertext: string) => string;
 
 // ---------------------------------------------------------------------------
 // Warning callback type — surfaced when attribute keys/values are truncated.
 // ---------------------------------------------------------------------------
 
+/** A warning surfaced when an adapter truncates over-long attribute keys or values. */
 export type AdapterWarning =
   | {
       type: "attr_keys_truncated";
