@@ -1,0 +1,10 @@
+.git
+node_modules
+dist
+coverage
+.vitest-cache
+demo/node_modules
+demo/.next
+**/*.log
+*.tgz
+.DS_Store

@@ -1,0 +1,99 @@
+{
+  "name": "@campfhir/bored-logs",
+  "version": "0.1.0",
+  "description": "Structured PostgreSQL-backed logging for Next.js — custom logger, adapter architecture, React UI components, and DB migration.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "import": "./dist/components/index.mjs",
+      "require": "./dist/components/index.js"
+    },
+    "./adapters/psql": {
+      "types": "./dist/adapters/psql.d.ts",
+      "import": "./dist/adapters/psql.mjs",
+      "require": "./dist/adapters/psql.js"
+    },
+    "./adapters/psql/migration": {
+      "types": "./dist/adapters/psql/migration.d.ts",
+      "import": "./dist/adapters/psql/migration.mjs",
+      "require": "./dist/adapters/psql/migration.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "components": [
+        "./dist/components/index.d.ts"
+      ],
+      "adapters/psql": [
+        "./dist/adapters/psql.d.ts"
+      ],
+      "adapters/psql/migration": [
+        "./dist/adapters/psql/migration.d.ts"
+      ]
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup",
+    "prepublishOnly": "pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down -v",
+    "demo": "docker compose -f demo/compose.yaml up --build",
+    "demo:down": "docker compose -f demo/compose.yaml down -v"
+  },
+  "peerDependencies": {
+    "kysely": ">=0.27",
+    "pg": ">=8",
+    "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    },
+    "kysely": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6",
+    "@testing-library/react": "^16",
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "jsdom": "^26",
+    "kysely": "^0.27.0",
+    "pg": "^8",
+    "react": "^19",
+    "react-dom": "^19",
+    "tsup": "^8",
+    "typescript": "^5",
+    "vitest": "^3"
+  }
+}

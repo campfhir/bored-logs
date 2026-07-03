@@ -1,0 +1,302 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (toggle `.dark` on <html>) on top of the system default. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------------- */
+/* Semantic theme tokens — flip between light (default) and dark.             */
+/* ------------------------------------------------------------------------- */
+:root {
+  --bl-surface: #ffffff;
+  --bl-surface-2: var(--color-slate-100);
+  --bl-border: var(--color-slate-200);
+  --bl-text: var(--color-slate-900);
+  --bl-muted: var(--color-slate-500);
+  --bl-hover: var(--color-slate-100);
+  --bl-input: #ffffff;
+  --bl-shadow: 0 10px 30px rgb(15 23 42 / 0.12);
+  --bl-chip-bg: color-mix(in oklab, var(--color-sky-500) 14%, white);
+  --bl-chip-border: var(--color-sky-400);
+  --bl-chip-text: var(--color-sky-700);
+}
+.dark {
+  --bl-surface: var(--color-slate-900);
+  --bl-surface-2: var(--color-slate-800);
+  --bl-border: var(--color-slate-800);
+  --bl-text: var(--color-slate-100);
+  --bl-muted: var(--color-slate-400);
+  --bl-hover: color-mix(in oklab, var(--color-slate-800) 55%, transparent);
+  --bl-input: var(--color-slate-950);
+  --bl-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  --bl-chip-bg: color-mix(in oklab, var(--color-sky-500) 15%, transparent);
+  --bl-chip-border: var(--color-sky-500);
+  --bl-chip-text: var(--color-sky-200);
+}
+
+/* ------------------------------------------------------------------------- */
+/* The bored-logs components ship style-less — they only expose semantic      */
+/* elements and data-* hooks. Everything below styles them for the demo.      */
+/* ------------------------------------------------------------------------- */
+
+/* --- LogSearchBar --------------------------------------------------------- */
+.log-search > div {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--bl-border);
+  background: var(--bl-surface);
+  padding: 0.5rem 0.625rem;
+}
+.log-search input {
+  flex: 1;
+  min-width: 12rem;
+  border: none;
+  background: transparent;
+  color: var(--bl-text);
+  outline: none;
+  font-size: 0.875rem;
+}
+.log-search input::placeholder { color: var(--bl-muted); }
+.log-search input[aria-invalid="true"] { color: var(--color-red-500); }
+
+.log-search [data-log-filter-chip] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--bl-chip-border);
+  background: var(--bl-chip-bg);
+  padding: 0.125rem 0.25rem 0.125rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--bl-chip-text);
+  font-family: ui-monospace, monospace;
+}
+.log-search [data-log-filter-chip] button[data-log-filter-chip-edit] {
+  cursor: pointer; border: none; background: transparent; padding: 0; font: inherit; color: inherit;
+}
+.log-search [data-log-filter-chip] button[data-log-filter-chip-edit]:hover { text-decoration: underline; }
+.log-search [data-log-filter-chip] button:not([data-log-filter-chip-edit]) {
+  cursor: pointer; border-radius: 0.25rem; padding: 0 0.25rem; color: var(--bl-chip-text);
+}
+.log-search [data-log-filter-chip] button:not([data-log-filter-chip-edit]):hover {
+  background: color-mix(in oklab, var(--color-sky-500) 25%, transparent);
+}
+
+.log-search [data-log-search-suggestions] {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0; right: 0;
+  z-index: 20;
+  max-height: 16rem;
+  overflow-y: auto;
+  border-radius: 0.5rem;
+  border: 1px solid var(--bl-border);
+  background: var(--bl-surface);
+  padding: 0.25rem;
+  box-shadow: var(--bl-shadow);
+}
+.log-search [role="option"] {
+  cursor: pointer; border-radius: 0.375rem; padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem; color: var(--bl-text); font-family: ui-monospace, monospace;
+}
+.log-search [role="option"]:hover,
+.log-search [role="option"][data-selected] { background: var(--bl-hover); }
+
+.log-search [data-log-search-error],
+.log-search [data-log-search-warning] { flex-basis: 100%; font-size: 0.8125rem; padding-top: 0.125rem; }
+.log-search [data-log-search-error] { color: var(--color-red-500); }
+.log-search [data-log-search-warning] { color: var(--color-amber-600); }
+.dark .log-search [data-log-search-warning] { color: var(--color-amber-400); }
+
+.log-search [aria-label="Clear search"] {
+  cursor: pointer; margin-left: auto; border-radius: 0.375rem; padding: 0 0.5rem; color: var(--bl-muted);
+}
+.log-search [aria-label="Clear search"]:hover { background: var(--bl-hover); color: var(--bl-text); }
+
+/* --- LogSearchSyntaxHelp -------------------------------------------------- */
+.log-help [data-log-search-syntax-help] dl {
+  display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem;
+}
+.log-help dt { font-family: ui-monospace, monospace; color: var(--bl-text); }
+.log-help dd { color: var(--bl-muted); }
+
+/* --- LogLevelFilter ------------------------------------------------------- */
+.log-levels [data-log-level-filter] { display: inline-flex; flex-wrap: wrap; gap: 0.375rem; }
+.log-levels button {
+  cursor: pointer; border-radius: 9999px; border: 1px solid var(--bl-border); background: transparent;
+  padding: 0.1875rem 0.625rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.03em; color: var(--bl-muted); transition: all 0.1s;
+}
+.log-levels button:hover { border-color: var(--color-slate-400); color: var(--bl-text); }
+.log-levels button[data-selected][data-level="debug" i]    { border-color: var(--color-slate-500); background: color-mix(in oklab, var(--color-slate-500) 20%, transparent); color: var(--bl-text); }
+.log-levels button[data-selected][data-level="info" i]     { border-color: var(--color-emerald-500); background: color-mix(in oklab, var(--color-emerald-500) 20%, transparent); color: var(--color-emerald-700); }
+.log-levels button[data-selected][data-level="warn" i]     { border-color: var(--color-amber-500); background: color-mix(in oklab, var(--color-amber-500) 22%, transparent); color: var(--color-amber-700); }
+.log-levels button[data-selected][data-level="error" i]    { border-color: var(--color-red-500); background: color-mix(in oklab, var(--color-red-500) 18%, transparent); color: var(--color-red-700); }
+.log-levels button[data-selected][data-level="critical" i] { border-color: var(--color-red-600); background: var(--color-red-600); color: #fff; }
+.dark .log-levels button[data-selected][data-level="info" i]  { color: var(--color-emerald-200); }
+.dark .log-levels button[data-selected][data-level="warn" i]  { color: var(--color-amber-200); }
+.dark .log-levels button[data-selected][data-level="error" i] { color: var(--color-red-200); }
+
+/* --- Level badges (shared by LogTable + LogCard) -------------------------- */
+.log-table [data-level],
+.log-cards [data-level] {
+  display: inline-block; border-radius: 0.25rem; padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+}
+.log-table [data-level="debug" i],    .log-cards [data-level="debug" i]    { background: color-mix(in oklab, var(--color-slate-500) 20%, transparent); color: var(--color-slate-600); }
+.log-table [data-level="info" i],     .log-cards [data-level="info" i]     { background: color-mix(in oklab, var(--color-emerald-500) 16%, transparent); color: var(--color-emerald-700); }
+.log-table [data-level="warn" i],     .log-cards [data-level="warn" i]     { background: color-mix(in oklab, var(--color-amber-500) 18%, transparent); color: var(--color-amber-700); }
+.log-table [data-level="error" i],    .log-cards [data-level="error" i]    { background: color-mix(in oklab, var(--color-red-500) 16%, transparent); color: var(--color-red-700); }
+.log-table [data-level="critical" i], .log-cards [data-level="critical" i] { background: var(--color-red-600); color: #fff; }
+.log-table [data-level="silent" i],   .log-cards [data-level="silent" i]   { background: color-mix(in oklab, var(--color-slate-500) 20%, transparent); color: var(--color-slate-500); }
+.dark .log-table [data-level="debug" i], .dark .log-cards [data-level="debug" i] { color: var(--color-slate-300); }
+.dark .log-table [data-level="info" i],  .dark .log-cards [data-level="info" i]  { color: var(--color-emerald-300); }
+.dark .log-table [data-level="warn" i],  .dark .log-cards [data-level="warn" i]  { color: var(--color-amber-300); }
+.dark .log-table [data-level="error" i], .dark .log-cards [data-level="error" i] { color: var(--color-red-300); }
+
+/* --- LogTable ------------------------------------------------------------- */
+.log-table table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.875rem; }
+.log-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--bl-muted); background: var(--bl-surface-2);
+  padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--bl-border);
+  cursor: pointer; white-space: nowrap; user-select: none;
+}
+.log-table thead th[data-sort]::after { content: " ↓"; }
+.log-table thead th[data-sort="asc"]::after { content: " ↑"; }
+.log-table thead th[data-sort] { color: var(--bl-text); }
+
+.log-table tbody td {
+  padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--bl-border); color: var(--bl-text); vertical-align: top;
+}
+.log-table tbody td[data-column] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-table tbody tr:hover { background: var(--bl-hover); cursor: pointer; }
+
+/* Fixed column widths — `message` takes the remainder under table-fixed. */
+.log-table [data-column="timestamp"]  { width: 13rem; }
+.log-table [data-column="level"]      { width: 6rem; }
+.log-table [data-column="service"]    { width: 8rem; }
+.log-table [data-column="statusCode"] { width: 6rem; }
+.log-table [data-column="latencyMs"]  { width: 7rem; }
+
+.log-table [data-expanded] td { background: var(--bl-surface-2); white-space: normal; }
+.log-table [data-expanded] pre {
+  margin: 0; padding: 0.5rem 0; font-size: 0.75rem; color: var(--bl-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* --- Responsive: table on desktop, cards on mobile ------------------------ */
+/* Driven here (not Tailwind `hidden`) because these unlayered rules would
+   otherwise beat Tailwind's layered utilities. */
+.log-table-wrap { display: none; }
+.log-cards { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; }
+@media (min-width: 768px) {
+  .log-table-wrap { display: block; }
+  .log-cards { display: none; }
+}
+
+/* --- LogCard (mobile) ----------------------------------------------------- */
+.log-cards [data-log-card] {
+  border: 1px solid var(--bl-border);
+  border-left-width: 3px;
+  border-radius: 0.5rem;
+  background: var(--bl-surface);
+  padding: 0.625rem 0.75rem;
+}
+.log-cards [data-log-card][data-level="warn" i]     { border-left-color: var(--color-amber-500); }
+.log-cards [data-log-card][data-level="error" i]    { border-left-color: var(--color-red-500); }
+.log-cards [data-log-card][data-level="critical" i] { border-left-color: var(--color-red-600); }
+.log-cards [data-log-card][data-level="info" i]     { border-left-color: var(--color-emerald-500); }
+.log-cards [data-log-card][data-level="debug" i]    { border-left-color: var(--color-slate-500); }
+
+.log-cards [data-log-card-header] {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; cursor: pointer;
+}
+.log-cards [data-log-card-header]::after { content: "▸"; color: var(--bl-muted); font-size: 0.75rem; margin-left: auto; }
+.log-cards [data-log-card-header][aria-expanded="true"]::after { content: "▾"; }
+.log-cards [data-log-card-time] { color: var(--bl-muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+
+.log-cards [data-log-card-message] {
+  margin: 0.5rem 0; color: var(--bl-text); font-size: 0.875rem; word-break: break-word;
+}
+.log-cards [data-log-card-fields] {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: 0.375rem 0.75rem; margin: 0;
+}
+.log-cards [data-log-card-field] dt { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--bl-muted); }
+.log-cards [data-log-card-field] dd { margin: 0; font-size: 0.8125rem; color: var(--bl-text); }
+.log-cards [data-log-card-detail] pre {
+  margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--bl-muted); white-space: pre-wrap; word-break: break-word;
+}
+
+/* --- PurgeLogsDialog ------------------------------------------------------ */
+/* The component's root IS the panel — title, text, input and both buttons are
+   its direct children — so style the root as a centered card and paint the
+   backdrop with a pseudo-element. A 2-col grid puts the buttons side by side. */
+[role="dialog"] {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  width: calc(100% - 2rem);
+  max-width: 26rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--bl-border);
+  background: var(--bl-surface);
+  color: var(--bl-text);
+  padding: 1.5rem;
+  /* Backdrop via a huge spread shadow — it sits outside the card, so the card's
+     own background stays opaque. A ::before/inset overlay would paint on top of
+     the card's background (negative z-index still renders above the element's
+     own background within its stacking context) and tint it grey. */
+  box-shadow: 0 0 0 100vmax rgb(2 6 23 / 0.5), var(--bl-shadow);
+}
+/* Full-width rows; the two buttons keep their own columns on the last row. */
+[role="dialog"] > h3,
+[role="dialog"] > p,
+[role="dialog"] > label,
+[role="dialog"] > input { grid-column: 1 / -1; }
+
+[role="dialog"] h3 { margin: 0; font-size: 1.125rem; font-weight: 600; }
+[role="dialog"] p { margin: 0; font-size: 0.875rem; line-height: 1.4; color: var(--bl-muted); }
+[role="dialog"] label { margin: 0.25rem 0 -0.375rem; font-size: 0.75rem; font-weight: 500; color: var(--bl-muted); }
+[role="dialog"] input[type="date"] {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--bl-border);
+  background: var(--bl-input);
+  padding: 0.5rem 0.625rem;
+  color: var(--bl-text);
+  font-size: 0.875rem;
+}
+.dark [role="dialog"] input[type="date"] { color-scheme: dark; }
+
+[role="dialog"] button {
+  cursor: pointer;
+  border-radius: 0.5rem;
+  border: 1px solid var(--bl-border);
+  background: var(--bl-surface);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--bl-text);
+}
+[role="dialog"] button:hover { background: var(--bl-hover); }
+/* Purge (the confirm action) is the last child — danger styling. */
+[role="dialog"] button:last-child {
+  border-color: var(--color-red-600);
+  background: var(--color-red-600);
+  color: #fff;
+}
+[role="dialog"] button:last-child:hover {
+  background: var(--color-red-700);
+  border-color: var(--color-red-700);
+}
+[role="dialog"] button:disabled { opacity: 0.5; cursor: not-allowed; }

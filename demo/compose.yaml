@@ -1,0 +1,36 @@
+# Full-stack demo: Next.js app + Postgres, both in Docker.
+#
+#   cd demo
+#   docker compose up --build      # → http://localhost:3000
+#   docker compose down -v         # stop + wipe the database
+#
+# The web image builds the library and the demo in one multi-stage Dockerfile.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: bored-logs-demo-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bored_logs_demo
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bored_logs_demo"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  web:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    container_name: bored-logs-demo-web
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/bored_logs_demo
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
