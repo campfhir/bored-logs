@@ -6,7 +6,7 @@
     ".": "./src/index.ts",
     "./components": "./src/components/index.ts",
     "./adapters/psql": "./src/adapters/psql/adapter.ts",
-    "./adapters/psql/migration": "./src/adapters/psql/migration/001_logs.ts"
+    "./adapters/psql/migration": "./src/adapters/psql/migration/index.ts"
   },
   "publish": {
     "include": [

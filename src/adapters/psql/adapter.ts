@@ -12,11 +12,7 @@ import { Kysely, sql } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { Pool } from "pg";
 import type { PoolConfig } from "pg";
-import { up as up001, down as down001 } from "./migration/001_logs";
-import {
-  up as up002,
-  down as down002,
-} from "./migration/002_attr_val_name_index";
+import { up as runMigrations, down as rollbackMigrations } from "./migration";
 
 import type {
   QueryableLogAdapter,
@@ -744,14 +740,12 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   /** Run all logger migrations in order. Idempotent — safe to call on startup. */
   async migrate(): Promise<void> {
-    await up001(this._db);
-    await up002(this._db);
+    await runMigrations(this._db);
   }
 
   /** Roll back all logger migrations (reverse order). Idempotent — safe to call even if tables do not exist. */
   async rollback(): Promise<void> {
-    await down002(this._db);
-    await down001(this._db);
+    await rollbackMigrations(this._db);
   }
 
   /**

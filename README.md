@@ -102,17 +102,37 @@ Check which migrations have run with `migrationStatus()`:
 
 ```typescript
 const status = await adapter.migrationStatus();
-// [{ name: "001_logs", applied: true }]
+// [{ name: "001_logs", applied: true }, { name: "002_attr_val_name_index", applied: true }]
 ```
 
-Alternatively, import the standalone functions if you are running migrations outside of the adapter lifecycle:
+#### Running migrations outside the adapter lifecycle
+
+The `adapters/psql/migration` entrypoint exposes every migration directly, so you can run them from a standalone migration script without constructing a `PostgresAdapter`.
+
+The idempotent `up()` / `down()` helpers run **all** migrations (in order / reverse order). No tracking table is used, so they are safe to call on every startup:
 
 ```typescript
 import { up, down } from "@campfhir/bored-logs/adapters/psql/migration";
 
-await up(db); // create tables
-await down(db); // drop tables
+await up(db);   // apply every migration, in order
+await down(db); // reverse every migration
+
+// Run only specific migrations (applied in canonical order regardless of the
+// order listed); unknown names throw:
+await up(db, { only: ["002_attr_val_name_index"] });
 ```
+
+For tracked, versioned migrations, hand the provided `MigrationProvider` to Kysely's own [`Migrator`](https://kysely.dev/docs/migrations) — this records applied migrations in a `kysely_migration` table and unlocks `migrateToLatest`, `migrateUp`, `migrateDown`, and `migrateTo`:
+
+```typescript
+import { Migrator } from "kysely";
+import { migrationProvider } from "@campfhir/bored-logs/adapters/psql/migration";
+
+const migrator = new Migrator({ db, provider: migrationProvider });
+const { error, results } = await migrator.migrateToLatest();
+```
+
+The raw `MIGRATIONS` map (keyed by name) and the ordered `migrationNames` array are also exported if you need to compose or introspect them.
 
 ---
 

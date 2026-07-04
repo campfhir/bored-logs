@@ -30,7 +30,7 @@ export default defineConfig([
   {
     entry: {
       "adapters/psql": "src/adapters/psql/adapter.ts",
-      "adapters/psql/migration": "src/adapters/psql/migration/001_logs.ts",
+      "adapters/psql/migration": "src/adapters/psql/migration/index.ts",
     },
     format: ["esm", "cjs"],
     dts: true,

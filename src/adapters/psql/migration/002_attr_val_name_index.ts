@@ -24,6 +24,10 @@ export async function up(db: Kysely<any>): Promise<void> {
     .execute();
 }
 
+/**
+ * Reverses {@link up}: drops `log_attr_val_name_idx` and restores the original
+ * 001 `attr_val_name_idx` on the value column. Idempotent.
+ */
 export async function down(db: Kysely<any>): Promise<void> {
   await db.schema.dropIndex("log_attr_val_name_idx").ifExists().execute();
 
