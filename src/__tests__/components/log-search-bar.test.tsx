@@ -127,6 +127,40 @@ describe("LogSearchBar autocomplete", () => {
       expect(screen.getByRole("option", { name: "service" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "env" })).not.toBeInTheDocument();
     });
+
+    it("tags built-in fields as builtin, distinct from attributes", () => {
+      render(<LogSearchBar logs={logs} />);
+      type(getInput(), "e"); // matches built-ins (level/message/timestamp) and attrs
+      expect(screen.getByRole("option", { name: "level" })).toHaveAttribute("data-kind", "builtin");
+      expect(screen.getByRole("option", { name: "env" })).toHaveAttribute("data-kind", "attribute");
+    });
+
+    it("lists built-in fields before attributes", () => {
+      render(<LogSearchBar logs={logs} />);
+      type(getInput(), "e");
+      const kinds = screen.getAllByRole("option").map((o) => o.getAttribute("data-kind"));
+      // No attribute appears before the last built-in.
+      expect(kinds.lastIndexOf("builtin")).toBeLessThan(kinds.indexOf("attribute"));
+    });
+
+    it("does not duplicate a built-in when an attribute shares its name", () => {
+      const collidingLogs: LogRow[] = [
+        { id: "1", level: "info", message: "m", meta: { level: "shadow", env: "prod" }, timestamp: null },
+      ];
+      render(<LogSearchBar logs={collidingLogs} />);
+      type(getInput(), "level");
+      const opts = screen.getAllByRole("option", { name: "level" });
+      expect(opts).toHaveLength(1);
+      expect(opts[0]).toHaveAttribute("data-kind", "builtin");
+    });
+
+    it("keeps the accessible name equal to the field name for built-ins", () => {
+      render(<LogSearchBar logs={logs} />);
+      type(getInput(), "lev");
+      // The visible "built-in" tag is aria-hidden, so accepting still inserts level:.
+      fireEvent.mouseDown(screen.getByRole("option", { name: "level" }));
+      expect(getInput().value).toBe("level:");
+    });
   });
 
   describe("operator stage", () => {

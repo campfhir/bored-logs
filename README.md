@@ -17,6 +17,7 @@ Structured PostgreSQL-backed logging for Next.js — custom adapter-based logger
   - [LogCard](#logcard)
   - [LogSearchBar](#logsearchbar)
   - [LogLevelFilter](#loglevelfilter)
+  - [LogDateRangePicker](#logdaterangepicker)
   - [LogSearchSyntaxHelp](#logsearchsyntaxhelp)
   - [PurgeLogsDialog](#purgelogsdialog)
   - [Composing components](#composing-components)
@@ -496,6 +497,7 @@ import {
   LogCard,
   LogSearchBar,
   LogLevelFilter,
+  LogDateRangePicker,
   LogSearchSyntaxHelp,
   PurgeLogsDialog,
 } from "@campfhir/bored-logs/components";
@@ -511,6 +513,9 @@ import type {
   LogCardField,
   LogSearchBarProps,
   LogLevelFilterProps,
+  LogDateRangePickerProps,
+  LogDateRange,
+  QuickRange,
 } from "@campfhir/bored-logs/components";
 ```
 
@@ -684,7 +689,7 @@ import { queryLogs } from "@/actions/logs";
 
 **Autocomplete behaviour** (requires `logs` prop):
 
-- Typing a partial key shows matching key suggestions (including `level`, `message`, `timestamp` always). Group-aware — fires on the term after `(`, `||`, `&&`.
+- Typing a partial key shows matching key suggestions. The built-in fields (`timestamp`, `level`, `message`) are always offered, listed first, and tagged (`data-kind="builtin"` plus an `aria-hidden` "built-in" label) so it's clear you're picking the built-in field rather than a same-named attribute — a colliding attribute of the same name is not shown twice. Attribute keys carry `data-kind="attribute"`. Group-aware — fires on the term after `(`, `||`, `&&`.
 - After `key:`, operator suggestions appear (`'`, `='`, `!'`, `!='`, `>'`, `>='`, `<'`, `<='`).
 - After `key:'`, value suggestions show unique values for that key from `logs`.
 - **Tab** cycles through suggestions; **Enter** accepts the highlighted suggestion (or commits if none selected); **Escape** dismisses suggestions for the current stage.
@@ -723,6 +728,49 @@ const [levels, setLevels] = useState<string[]>([]);
 | `className` | `string`                     | —              | Applied to the root `<div role="group">`                          |
 
 Renders a `<div role="group" data-log-level-filter>` of `<button>`s. Each button has `data-level="<name>"` and, when selected, `data-selected` (plus `aria-pressed`) — style the selected state per level. Selecting several levels reads as "any of" via the level `IN (…)` clause.
+
+### `LogDateRangePicker`
+
+A controlled, style-less date-range control. It pairs explicit start/end `datetime-local` inputs (validated so start is on or before end) with configurable quick "last X" presets, and emits ISO-8601 strings ready for `query({ start, end })`.
+
+```tsx
+import { LogDateRangePicker } from "@campfhir/bored-logs/components";
+import type { LogDateRange } from "@campfhir/bored-logs/components";
+import { queryLogs } from "@/actions/logs";
+
+const [range, setRange] = useState<LogDateRange>({ start: null, end: null });
+
+<LogDateRangePicker
+  value={range}
+  onChange={async (next) => {
+    setRange(next);
+    const res = await queryLogs({ start: next.start ?? undefined, end: next.end ?? undefined });
+    if (res.ok) setLogs(res.val);
+  }}
+/>;
+```
+
+| Prop              | Type                              | Default                | Description                                                                 |
+| ----------------- | --------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `value`           | `LogDateRange`                    | —                      | `{ start, end }` as ISO-8601 strings (or `null`), controlled                |
+| `onChange`        | `(range: LogDateRange) => void`   | —                      | Called with the next range on any valid change; an invalid range is not emitted |
+| `quickRanges`     | `QuickRange[]`                    | `DEFAULT_QUICK_RANGES` | Presets — each is `{ label, resolve(now) => { start, end? } }`              |
+| `hideQuickRanges` | `boolean`                         | `false`                | Hide the preset buttons, leaving only the start/end inputs                  |
+| `hideCustomRange` | `boolean`                         | `false`                | Hide the start/end inputs, leaving only the presets                         |
+| `className`       | `string`                          | —                      | Applied to the root `<div data-log-date-range>`                             |
+
+Define your own presets by resolving each option to a concrete range (return `end` as `null`/omitted for an open upper bound):
+
+```tsx
+import type { QuickRange } from "@campfhir/bored-logs/components";
+
+const quickRanges: QuickRange[] = [
+  { label: "Today", resolve: (now) => ({ start: new Date(now.setHours(0, 0, 0, 0)) }) },
+  { label: "Last 90 days", resolve: (now) => ({ start: new Date(now.getTime() - 90 * 86_400_000), end: now }) },
+];
+```
+
+The default presets (`DEFAULT_QUICK_RANGES`) are last 15 min, hour, 24 hours, 7 days, and 30 days. An invalid range (start after end) surfaces a `role="alert"` message (`data-log-date-range-error`) and sets `aria-invalid` on both inputs; the presets group is a `<div role="group" data-log-date-range-quick>` and each input is `data-log-date-range-start` / `-end`.
 
 ### `LogSearchSyntaxHelp`
 

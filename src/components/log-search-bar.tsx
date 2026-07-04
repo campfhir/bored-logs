@@ -18,9 +18,16 @@ type AutocompleteCtx =
   | { type: "operator"; key: string; prefix: string }
   | { type: "value"; key: string; opPrefix: string; prefix: string };
 
-type Suggestion = { display: string; insert: string };
+type SuggestionKind = "builtin" | "attribute";
 
-const ALWAYS_SUGGESTED_KEYS = ["level", "message", "timestamp"];
+type Suggestion = { display: string; insert: string; kind?: SuggestionKind };
+
+/**
+ * Built-in query fields — not attributes. They are always suggested, listed
+ * first, and tagged `builtin` so it is obvious the user is selecting the
+ * built-in field of that name rather than a same-named attribute.
+ */
+const BUILTIN_KEYS = ["timestamp", "level", "message"];
 
 function quoteKey(key: string): string {
   return /[\s:'"=<>!]/.test(key) ? `'${key.replace(/'/g, "\\'")}'` : key;
@@ -80,14 +87,27 @@ function computeSuggestions(ctx: AutocompleteCtx, logs: LogRow[]): Suggestion[] 
   const lower = ctx.prefix.toLowerCase();
 
   if (ctx.type === "key") {
-    const keys = new Set(ALWAYS_SUGGESTED_KEYS);
+    // Built-in fields always come first, tagged so they read as the built-in
+    // of that name rather than a same-named attribute.
+    const builtins = BUILTIN_KEYS.filter((k) => k.toLowerCase().includes(lower))
+      .sort()
+      .map((k): Suggestion => ({ display: k, insert: quoteKey(k) + ":", kind: "builtin" }));
+
+    // Attribute keys, excluding any that collide with a built-in name — the
+    // built-in above already represents that name and the emitted token is
+    // identical, so a second entry would only be confusing.
+    const attrKeys = new Set<string>();
     for (const log of logs) {
-      for (const k of Object.keys(log.meta)) keys.add(k);
+      for (const k of Object.keys(log.meta)) {
+        if (!BUILTIN_KEYS.includes(k)) attrKeys.add(k);
+      }
     }
-    return [...keys]
+    const attrs = [...attrKeys]
       .filter((k) => k.toLowerCase().includes(lower))
       .sort()
-      .map((k) => ({ display: k, insert: quoteKey(k) + ":" }));
+      .map((k): Suggestion => ({ display: k, insert: quoteKey(k) + ":", kind: "attribute" }));
+
+    return [...builtins, ...attrs];
   }
 
   if (ctx.type === "operator") {
@@ -424,12 +444,21 @@ export default function LogSearchBar({
               role="option"
               aria-selected={i === selectedIdx}
               data-selected={i === selectedIdx || undefined}
+              data-kind={s.kind}
               onMouseDown={(e) => {
                 e.preventDefault(); // keep input focused
                 acceptSuggestion(i);
               }}
             >
               {s.display}
+              {s.kind === "builtin" && (
+                // aria-hidden so the option's accessible name stays exactly the
+                // field name; the tag is a visible, style-able hint only.
+                <span data-log-search-suggestion-builtin aria-hidden="true">
+                  {" "}
+                  built-in
+                </span>
+              )}
             </li>
           ))}
         </ul>
