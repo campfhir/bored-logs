@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { useEffect } from "react";
-import { LoggerProvider, useLogger, useLogShipper } from "../client/context";
-import type { Logger } from "../logger/logger";
+import { LoggerProvider, useLogger, useLogShipper, type ClientLogger } from "../client/context";
 import type { HttpAdapter } from "../adapters/http/adapter";
 import { secure, redact } from "../logger/template";
 import type { LogShipmentPayload } from "../adapters/http/types";
@@ -17,7 +16,7 @@ describe("LoggerProvider + useLogger", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("ships records logged through the provider's logger to the endpoint", async () => {
-    let logger!: Logger;
+    let logger!: ClientLogger;
     let ship!: HttpAdapter;
     function Probe() {
       logger = useLogger();
@@ -51,7 +50,7 @@ describe("LoggerProvider + useLogger", () => {
   });
 
   it("applies secure/redact rules end-to-end through the logger", async () => {
-    let logger!: Logger;
+    let logger!: ClientLogger;
     let ship!: HttpAdapter;
     function Probe() {
       logger = useLogger();
@@ -75,6 +74,37 @@ describe("LoggerProvider + useLogger", () => {
     expect(shipped.message).toBe("pay [secure] tok **REDACTED**");
     expect((shipped.attrs.pan as { _secure?: boolean })._secure).toBe(true);
     expect("tok" in shipped.attrs).toBe(false);
+  });
+
+  it("live-syncs config props (application) to the logger on re-render", async () => {
+    let logger!: ClientLogger;
+    let ship!: HttpAdapter;
+    function Probe() {
+      logger = useLogger();
+      ship = useLogShipper();
+      return null;
+    }
+    const { rerender } = render(
+      <LoggerProvider endpoint="/api/logs" application="web" console={false} batchSize={100} flushInterval={0}>
+        <Probe />
+      </LoggerProvider>,
+    );
+
+    rerender(
+      <LoggerProvider endpoint="/api/logs" application="admin" console={false} batchSize={100} flushInterval={0}>
+        <Probe />
+      </LoggerProvider>,
+    );
+
+    act(() => {
+      logger.info("hi");
+    });
+    await act(async () => {
+      await ship.flush();
+    });
+
+    const [shipped] = (JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string) as LogShipmentPayload).logs;
+    expect(shipped.application).toBe("admin");
   });
 
   it("registers a caller-supplied adapter alongside shipping", async () => {

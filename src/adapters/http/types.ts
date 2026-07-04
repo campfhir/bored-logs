@@ -15,9 +15,9 @@
  * string.
  *
  * Sensitivity is resolved before a record becomes a `ClientLogRecord` (see
- * `buildClientRecord`): `secure()` values are shipped with their tag intact so
- * the server can encrypt them at rest, while `redact()` values are scrubbed to
- * a placeholder (or omitted) and never cross the wire in plaintext.
+ * `recordToClientRecord`): `secure()` values are shipped with their tag intact
+ * so the server can encrypt them at rest, while `redact()` values are scrubbed
+ * to a placeholder (or omitted) and never cross the wire in plaintext.
  */
 export type ClientLogRecord = {
   /** Log level string (e.g. "info", "error"). */

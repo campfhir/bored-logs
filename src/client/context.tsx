@@ -25,15 +25,26 @@ import type { ClientLogRecord } from "../adapters/http/types";
 //   2. ShipAdapter — batches records and ships them to `endpoint`.
 //   3. ...any adapters passed via the `adapters` prop.
 //
-// One logger is created per provider mount (kept in a ref). Mutable shipping
-// options and the logger level are re-synced on every commit; the ship
-// transport's flush timer and page-unload beacon are attached on mount and torn
-// down (with a final flush) on unmount.
+// One logger is created per provider mount (kept in a ref). Its config props
+// (level, application, version, serializeValue, levels) and the shipping options
+// are re-synced on every commit; the ship transport's flush timer and
+// page-unload beacon are attached on mount and torn down (with a final flush) on
+// unmount. Only the *structural* adapter props — `console` and `adapters` — are
+// read once at mount, since reactively adding/removing sinks would strand
+// buffered records.
 // ---------------------------------------------------------------------------
 
 type LoggerContextValue = { logger: Logger; ship: HttpAdapter };
 
 const LoggerContext = createContext<LoggerContextValue | null>(null);
+
+/**
+ * The client-facing subset of {@link Logger} returned by {@link useLogger}:
+ * `log()` + a method per built-in level, plus `flush()` / `addLevels()`.
+ * Server-only methods (`ingest`, `queryAdapter`, process hooks via `on`, and
+ * `close`) are omitted — they either throw or no-op in the browser.
+ */
+export type ClientLogger = Omit<Logger, "on" | "queryAdapter" | "ingest" | "close">;
 
 /** Props for {@link LoggerProvider}. */
 export type LoggerProviderProps = {
@@ -146,11 +157,17 @@ export function LoggerProvider(props: LoggerProviderProps): ReactElement {
 
   const { logger, ship } = ref.current;
 
-  // Keep mutable shipping options and the logger level in sync with props on
-  // every commit (covers function props like headers/transport/onError too).
+  // Keep the shipping options and the logger's config props in sync on every
+  // commit (covers function props like headers/transport/onError too). The
+  // structural `console`/`adapters` props are intentionally not re-applied here
+  // — see the note above.
   useEffect(() => {
     ship.setOptions(shipOptionsFrom(props));
     logger.level = props.level ?? "debug";
+    logger.application = props.application;
+    logger.version = props.version;
+    if (props.serializeValue) logger.serializeValue = props.serializeValue;
+    if (props.levels) logger.addLevels(props.levels);
   });
 
   // Start the flush timer + unload beacon on mount; flush and tear down on unmount.
@@ -188,7 +205,7 @@ function useLoggerContext(): LoggerContextValue {
  * logger.info("Checkout opened for {cartId}", { cartId });
  * logger.error("Payment failed: {reason}", { reason, amount });
  */
-export function useLogger(): Logger {
+export function useLogger(): ClientLogger {
   return useLoggerContext().logger;
 }
 

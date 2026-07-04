@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { HttpAdapter } from "../adapters/http/adapter";
-import { buildClientRecord, recordToClientRecord } from "../adapters/http/record";
+import { recordToClientRecord } from "../adapters/http/record";
 import { secure, redact, isSecure } from "../logger/template";
 import type { LogRecord } from "../logger/adapter";
 import type { LogShipmentPayload } from "../adapters/http/types";
@@ -26,7 +26,7 @@ function bodyOf(fetchMock: ReturnType<typeof vi.fn>, call = 0): LogShipmentPaylo
 }
 
 // ---------------------------------------------------------------------------
-// recordToClientRecord / buildClientRecord — sensitivity resolution
+// recordToClientRecord — sensitivity resolution
 // ---------------------------------------------------------------------------
 
 describe("recordToClientRecord", () => {
@@ -76,21 +76,8 @@ describe("recordToClientRecord", () => {
   });
 });
 
-describe("buildClientRecord (logger-less path)", () => {
-  const now = () => new Date("2026-07-04T00:00:00.000Z");
-  it("interpolates and stamps from a level+template+attrs", () => {
-    const cr = buildClientRecord("info", "Hi {n}", { n: "Ada" }, { application: "web", now });
-    expect(cr).toMatchObject({ level: "info", message: "Hi Ada", application: "web", timestamp: "2026-07-04T00:00:00.000Z" });
-  });
-  it("handles a secure() template", () => {
-    const cr = buildClientRecord("info", secure("secret {x}"), { x: "y" }, { now });
-    expect(cr.secureMessage).toBe(true);
-    expect(cr.message).toBe("[secure]");
-  });
-});
-
 // ---------------------------------------------------------------------------
-// ShipAdapter
+// HttpAdapter
 // ---------------------------------------------------------------------------
 
 describe("HttpAdapter", () => {

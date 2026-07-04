@@ -13,7 +13,8 @@ export async function simulate(scenarioId: string): Promise<{ count: number }> {
   if (!scenario) return { count: 0 };
 
   const records = scenario.generate();
-  for (const r of records) logger.log(r.level, r.template, r.attrs);
+  // Scenario levels are dynamic strings (all valid built-ins), so cast to LogLevel.
+  for (const r of records) logger.log(r.level as LogLevel, r.template, r.attrs);
   await adapter.flush();
 
   return { count: records.length };

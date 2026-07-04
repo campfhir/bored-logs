@@ -1,11 +1,9 @@
 import type { ClientLogRecord } from "./types";
 import type { LogRecord } from "../../logger/adapter";
 import {
-  type Secure,
   type ValueSerializer,
   REDACTED_PLACEHOLDER,
   interpolate,
-  isSecure,
   isRedacted,
   defaultSerializer,
 } from "../../logger/template";
@@ -33,14 +31,6 @@ export type ShipOptions = {
   redactMode?: RedactMode;
   /** Placeholder substituted for redacted values. Defaults to {@link REDACTED_PLACEHOLDER}. */
   redactPlaceholder?: string;
-};
-
-/** Context needed to stamp a {@link ClientLogRecord} from scratch. */
-export type BuildRecordContext = ShipOptions & {
-  application?: string;
-  version?: string;
-  /** Clock — injectable for tests. Defaults to `() => new Date()`. */
-  now?: () => Date;
 };
 
 /**
@@ -104,38 +94,5 @@ export function recordToClientRecord(
     timestamp: record.timestamp.toISOString(),
     application: record.application,
     version: record.version,
-  };
-}
-
-/**
- * Build a wire {@link ClientLogRecord} from a level + message template + attrs,
- * without a logger. Useful for shipping outside the logger flow; the
- * `HttpAdapter` path uses {@link recordToClientRecord} instead.
- */
-export function buildClientRecord(
-  level: string,
-  template: string | Secure<string>,
-  attrs: Record<string, unknown>,
-  ctx: BuildRecordContext = {},
-): ClientLogRecord {
-  const serialize = ctx.serialize ?? defaultSerializer;
-  const now = ctx.now ?? (() => new Date());
-  const mode = ctx.redactMode ?? "placeholder";
-  const placeholder = ctx.redactPlaceholder ?? REDACTED_PLACEHOLDER;
-
-  const secureMessage = isSecure(template);
-  const rawTemplate = secureMessage
-    ? (template as Secure<string>).value
-    : (template as string);
-
-  return {
-    level,
-    message: shipMessage(secureMessage, rawTemplate, attrs, serialize, placeholder),
-    template: rawTemplate,
-    secureMessage,
-    attrs: prepareAttrs(attrs, mode, placeholder),
-    timestamp: now().toISOString(),
-    application: ctx.application,
-    version: ctx.version,
   };
 }

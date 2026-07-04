@@ -13,7 +13,7 @@
  */
 
 export { LoggerProvider, useLogger, useLogShipper } from "./context";
-export type { LoggerProviderProps } from "./context";
+export type { LoggerProviderProps, ClientLogger } from "./context";
 
 // The HTTP shipping adapter also has a standalone entry: `@campfhir/bored-logs/adapters/http`.
 export { HttpAdapter } from "../adapters/http/adapter";
@@ -23,8 +23,9 @@ export type {
   HeadersInput,
 } from "../adapters/http/adapter";
 
-export { buildClientRecord, recordToClientRecord } from "../adapters/http/record";
-export type { BuildRecordContext, ShipOptions, RedactMode } from "../adapters/http/record";
+// `redactMode` prop / option type. Record conversion is handled internally by
+// `HttpAdapter`, so the converter itself is not part of the public surface.
+export type { RedactMode } from "../adapters/http/record";
 
 export type { ClientLogRecord, LogShipmentPayload } from "../adapters/http/types";
 

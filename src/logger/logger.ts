@@ -52,11 +52,11 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
   private readonly _adapters: LogAdapter[] = [];
   private _buffer: LogRecord[] = [];
   private _level: string;
-  private readonly _application?: string;
-  private readonly _version?: string;
+  private _application?: string;
+  private _version?: string;
   private readonly _bufferLimit: number;
   private readonly _levels: Record<string, number>;
-  private readonly _serialize: ValueSerializer;
+  private _serialize: ValueSerializer;
 
   constructor(opts: LoggerOptions = {}) {
     this._level = opts.level ?? "debug";
@@ -77,6 +77,30 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
   /** Set the minimum emit level; records below it are dropped. */
   set level(value: string) {
     this._level = value;
+  }
+
+  /** Application name stamped on every record (mutable so callers — e.g. a provider — can keep it in sync). */
+  get application(): string | undefined {
+    return this._application;
+  }
+  set application(value: string | undefined) {
+    this._application = value;
+  }
+
+  /** Application version stamped on every record. */
+  get version(): string | undefined {
+    return this._version;
+  }
+  set version(value: string | undefined) {
+    this._version = value;
+  }
+
+  /** Serializer for non-string attribute values interpolated into message templates. */
+  get serializeValue(): ValueSerializer {
+    return this._serialize;
+  }
+  set serializeValue(value: ValueSerializer) {
+    this._serialize = value ?? defaultSerializer;
   }
 
   // ── Adapter management ──────────────────────────────────────────────────
@@ -144,9 +168,15 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
 
   // ── Core write ──────────────────────────────────────────────────────────
 
-  /** Emit a record at the given level, interpolating `{key}` placeholders from `attrs`. */
+  /**
+   * Emit a record at the given level, interpolating `{key}` placeholders from
+   * `attrs`. `level` is restricted to registered levels (`keyof TLevels`);
+   * register custom levels via `createLogger({ levels })` / `addLevels()` (and
+   * augment the {@link LogLevels} interface) to widen it. To log a dynamically
+   * computed level string, cast it to a known level.
+   */
   log<T extends string | Secure<string>>(
-    level: (string & {}) | (keyof TLevels & string),
+    level: keyof TLevels & string,
     template: T,
     ...args: TemplateAttrs<T>
   ): void {

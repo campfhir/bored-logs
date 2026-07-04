@@ -252,7 +252,7 @@ logger.log("sql", "Query executed", { duration: 42 });
 logger.log("critical", "Database unreachable");
 ```
 
-Named methods exist for every built-in level: `critical`, `error`, `warn`, `info`, `http`, `verbose`, `cache`, `request`, `response`, `sql`, `debug`. Use `log(level, …)` for any level (including custom ones).
+Named methods exist for every built-in level: `critical`, `error`, `warn`, `info`, `http`, `verbose`, `cache`, `request`, `response`, `sql`, `debug`. Use `log(level, …)` for any **registered** level. `level` is typed to the registered levels, so an unregistered name is a compile error — register custom levels via `createLogger({ levels })` / `addLevels()` (see [Custom levels](#custom-levels)). To emit a dynamically computed level string, cast it to a known level (`logger.log(dynamic as LogLevel, …)`).
 
 ### Log levels
 
@@ -514,7 +514,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 }
 ```
 
-The provider builds one `Logger` per mount with the console + ship adapters (plus any you supply). Changing props like `endpoint`, `headers`, or `level` re-syncs the transport without tearing down the queue.
+The provider builds one `Logger` per mount with the console + ship adapters (plus any you supply). **Config props are live** — changing `endpoint`, `headers`, `credentials`, `level`, `application`, `version`, `serializeValue`, or `levels` re-syncs the running logger and transport without tearing down the queue. The **structural adapter props `console` and `adapters` are read once at mount** (reactively adding/removing sinks would strand buffered records) — set them when you mount the provider.
 
 ### 3. Log from Client Components
 
@@ -543,7 +543,7 @@ export function CheckoutButton({ cartId }: { cartId: string }) {
 }
 ```
 
-`useLogger()` returns the full `Logger` — `log(level, template, attrs)` plus a method per built-in level (`info`, `error`, …), and `flush()`. Each call writes to the browser console and queues a shipment; batches flush automatically when the batch fills, on an interval, and on page unload. Need the transport directly (e.g. to read `pending` or force a `flush()`)? Use `useLogShipper()`, which returns the `HttpAdapter`.
+`useLogger()` returns a client `Logger` (`ClientLogger`) — `log(level, template, attrs)` plus a method per built-in level (`info`, `error`, …), `flush()`, and `addLevels()`. Server-only methods (`ingest`, `queryAdapter`, process hooks via `on`, `close`) are omitted from the type, since they throw or no-op in the browser. Each call writes to the browser console and queues a shipment; batches flush automatically when the batch fills, on an interval, and on page unload. Need the transport directly (e.g. to read `pending` or force a `flush()`)? Use `useLogShipper()`, which returns the `HttpAdapter`.
 
 `secure()` and `redact()` behave per [the boundary table](#redact--never-transmit): in the **browser console** both show the real value (private devtools); over the wire `secure()` ships tagged for server-side encryption and `redact()` is scrubbed.
 
