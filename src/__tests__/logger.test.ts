@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createLogger } from "../logger/logger";
-import { secure, isSecure, interpolate } from "../logger/template";
+import { secure, isSecure, redact, interpolate } from "../logger/template";
 import type { LogRecord } from "../logger/adapter";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +18,11 @@ describe("interpolate", () => {
 
   it("replaces Secure values with [secure]", () => {
     expect(interpolate("SSN {ssn}", { ssn: secure("123") })).toBe("SSN [secure]");
+  });
+
+  it("replaces Redacted values with the placeholder", () => {
+    expect(interpolate("tok {t}", { t: redact("abc") })).toBe("tok **REDACTED**");
+    expect(interpolate("tok {t}", { t: redact("abc") }, undefined, "‹x›")).toBe("tok ‹x›");
   });
 
   it("handles multiple tokens", () => {

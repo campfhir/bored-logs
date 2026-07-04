@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Nav from "./_components/nav";
+import DemoLoggerProvider from "./_components/logger-provider";
 
 export const metadata: Metadata = {
   title: "bored-logs demo",
@@ -17,8 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
       </head>
       <body className="flex h-dvh flex-col bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-        <Nav />
-        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        <DemoLoggerProvider>
+          <Nav />
+          <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        </DemoLoggerProvider>
       </body>
     </html>
   );

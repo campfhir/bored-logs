@@ -21,14 +21,13 @@ import type {
   LogQueryOptions,
   QueryError,
   PurgeError,
-  AttributeFilter,
   EncryptFn,
   DecryptFn,
   AdapterWarning,
 } from "../../logger/adapter";
 import type { FilterExpr, LogQueryToken } from "../../logger/parseLogQuery";
 import { LOG_LEVELS } from "../../logger/adapter";
-import { isSecure } from "../../logger/template";
+import { isSecure, isRedacted, REDACTED_PLACEHOLDER } from "../../logger/template";
 import type {
   Generated,
   Insertable,
@@ -158,7 +157,6 @@ export type PostgresQueryOptions = {
   id?: string | null;
   limit?: number;
   offset?: number;
-  attributeFilters?: AttributeFilter[];
   attributeFilter?: FilterExpr;
   logLevels: string[];
   sort: "asc" | "desc";
@@ -233,8 +231,30 @@ type LogItem = {
 // become (NOT) LIKE on logs.message.
 // ---------------------------------------------------------------------------
 
+// Built-in query keys map to real columns on the `logs` table rather than to
+// stored attributes in `log_attr`. `message`/`msg` → logs.message,
+// `timestamp` → logs.logged_timestamp, `level` → logs.level.
 function isMessageKey(key: string): boolean {
   return key === "message" || key === "msg";
+}
+function isTimestampKey(key: string): boolean {
+  return key === "timestamp";
+}
+function isLevelKey(key: string): boolean {
+  return key === "level";
+}
+
+// Matches an ISO-8601 / RFC-3339 date or date-time string (JS-side gate).
+const ISO_DATE_RE =
+  /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+// Matches a bare calendar date with no time-of-day component.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Parse an ISO/RFC date-time string into a Date, or null when unparseable. */
+function parseDateValue(value: string): Date | null {
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 /** Value predicate inside a log_attr EXISTS subquery. */
@@ -247,8 +267,7 @@ function attrValuePredicate(
   if (operator === "=") return eb("log_attr.val", "=", value);
 
   // Comparison operator. Guard the numeric cast with a regex so non-numeric
-  // values are excluded rather than raising a cast error — matches the
-  // behaviour of _fetchMatchingIds for the flat attributeFilters path.
+  // values are excluded rather than raising a cast error.
   const isNumeric = /^-?[0-9]+(\.[0-9]+)?$/.test(value);
   if (isNumeric) {
     const num = parseFloat(value);
@@ -257,10 +276,63 @@ function attrValuePredicate(
       sql<boolean>`log_attr.val::numeric ${sql.raw(operator)} ${sql.lit(num)}::numeric`,
     ]);
   }
+  // Date/time values: compare chronologically via a guarded timestamptz cast so
+  // ISO/RFC strings order by instant, not lexically (which breaks across mixed
+  // precisions and time zones). The regex guard keeps non-date rows sharing the
+  // same attribute name from raising a cast error.
+  if (ISO_DATE_RE.test(value)) {
+    return eb.and([
+      sql<boolean>`log_attr.val ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$'`,
+      sql<boolean>`log_attr.val::timestamptz ${sql.raw(operator)} ${value}::timestamptz`,
+    ]);
+  }
   return eb("log_attr.val", operator, value);
 }
 
-/** A single filter leaf → message LIKE or a correlated (NOT) EXISTS on log_attr. */
+/** A `timestamp:` leaf → a comparison against the real logs.logged_timestamp column. */
+function buildTimestampLeaf(
+  eb: ExpressionBuilder<any, any>,
+  token: LogQueryToken,
+): Expression<SqlBool> {
+  const { operator, value, negated } = token;
+  const date = parseDateValue(value);
+  // An unparseable date matches nothing (its negation matches everything),
+  // rather than silently comparing against a non-existent attribute.
+  if (date === null) return negated ? sql<boolean>`true` : sql<boolean>`false`;
+
+  let predicate: Expression<SqlBool>;
+  if ((operator === "=" || operator === "contains") && DATE_ONLY_RE.test(value)) {
+    // A bare date with `=`/`:` means "anywhere on that calendar day".
+    const next = new Date(date.getTime() + MS_PER_DAY);
+    predicate = eb.and([
+      eb("logs.logged_timestamp", ">=", date),
+      eb("logs.logged_timestamp", "<", next),
+    ]);
+  } else if (operator === "contains") {
+    predicate = eb("logs.logged_timestamp", "=", date);
+  } else {
+    predicate = eb("logs.logged_timestamp", operator, date);
+  }
+  return negated ? eb.not(predicate) : predicate;
+}
+
+/** A `level:` leaf → a comparison against the logs.level column (stored uppercased). */
+function buildLevelLeaf(
+  eb: ExpressionBuilder<any, any>,
+  token: LogQueryToken,
+): Expression<SqlBool> {
+  const { operator, value, negated } = token;
+  const upper = value.toUpperCase();
+  // Level is set membership, not an ordered scale, so any comparison operator
+  // other than `contains` is treated as an exact (case-insensitive) match.
+  const predicate =
+    operator === "contains"
+      ? eb("logs.level", "like", `%${upper}%`)
+      : eb("logs.level", "=", upper);
+  return negated ? eb.not(predicate) : predicate;
+}
+
+/** A single filter leaf → a built-in column comparison or a correlated (NOT) EXISTS on log_attr. */
 function buildLeaf(
   eb: ExpressionBuilder<any, any>,
   token: LogQueryToken,
@@ -268,6 +340,8 @@ function buildLeaf(
   if (isMessageKey(token.key)) {
     return eb("logs.message", token.negated ? "not like" : "like", `%${token.value}%`);
   }
+  if (isTimestampKey(token.key)) return buildTimestampLeaf(eb, token);
+  if (isLevelKey(token.key)) return buildLevelLeaf(eb, token);
   const exists = eb.exists(
     eb
       .selectFrom("log_attr")
@@ -360,6 +434,10 @@ function serializeAttrValue(
 
   if (value === null || value === undefined) {
     return { val: null, type: "null", encrypted: false };
+  } else if (isRedacted(value)) {
+    // Redacted values must never be persisted in plaintext — store the
+    // placeholder regardless of the wrapped value.
+    return { val: REDACTED_PLACEHOLDER, type: "string", encrypted: false };
   } else if (isSecure(value)) {
     // Unwrap Secure wrapper — treat the inner value as-is with encrypted=true.
     return serializeAttrValue(
@@ -513,7 +591,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
       const offset = options.offset ?? 0;
       const sort = options.sort ?? "desc";
       const message = options.message ?? "";
-      const attributeFilters = options.attributeFilters ?? [];
       const attributeFilter = options.attributeFilter;
 
       // Resolve the level filter to an exact-match set (SQL `IN`). `level` and
@@ -554,7 +631,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
       const result = await this._semaphore.run(() =>
         this._queryLogs({
-          attributeFilters,
           attributeFilter,
           logLevels,
           sort,
@@ -986,21 +1062,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
     const start = opts.dates?.start ?? startOfYesterday;
     const end = opts.dates?.end ?? endOfToday;
 
-    const attrFilters = opts.attributeFilters ?? [];
-    const msgFilters = attrFilters.filter(
-      (f) => f.key === "message" || f.key === "msg",
-    );
-    const keyFilters = attrFilters.filter(
-      (f) => f.key !== "message" && f.key !== "msg",
-    );
-
-    const allMsgTerms: string[] = [];
-    if (opts.msg) allMsgTerms.push(opts.msg);
-    for (const f of msgFilters) {
-      if (!f.negated) allMsgTerms.push(f.value);
-    }
-    const msg = allMsgTerms.join(" ");
-    const negatedMsgFilters = msgFilters.filter((f) => f.negated);
+    // Message term. Attribute/message/timestamp/level matching all flows through
+    // the `attributeFilter` boolean tree (see buildFilterExpr); this top-level
+    // `message` option is a convenience for a plain contains term.
+    const msg = opts.msg ?? "";
 
     // Single-ID lookup.
     if (opts.id != null) {
@@ -1045,13 +1110,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
     // Standard query.
     try {
-      const { includeIds: keyFilterIds, excludeIds: keyExcludeIds } =
-        await this._resolveKeyFilterIds(keyFilters, start, end);
-
-      if (keyFilterIds !== null && keyFilterIds.length === 0) {
-        return { ok: false, err: new Err("no logs found") };
-      }
-
       const logs = await this._db
         .selectFrom("logs")
         .select((eb) => [
@@ -1069,19 +1127,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
         .where("logs.logged_timestamp", ">=", start)
         .where("logs.logged_timestamp", "<", end)
         .$if(msg !== "", (qb) => qb.where("logs.message", "like", `%${msg}%`))
-        .$if(keyFilterIds !== null, (qb) =>
-          qb.where("logs.log_id", "in", keyFilterIds!),
-        )
-        .$if(keyExcludeIds.size > 0, (qb) =>
-          qb.where("logs.log_id", "not in", [...keyExcludeIds]),
-        )
-        .$call((qb) => {
-          let q = qb;
-          for (const f of negatedMsgFilters) {
-            q = q.where("logs.message", "not like", `%${f.value}%`);
-          }
-          return q;
-        })
         .$if(opts.attributeFilter != null, (qb) =>
           qb.where((eb) => buildFilterExpr(eb, opts.attributeFilter!)),
         )
@@ -1118,83 +1163,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
         err: new Err("failed to query").addCause(err as Error),
       };
     }
-  }
-
-  private async _fetchMatchingIds(
-    filter: NonNullable<PostgresQueryOptions["attributeFilters"]>[number],
-    start: Date,
-    end: Date,
-  ): Promise<Set<string>> {
-    const op = filter.operator;
-    const kyselyOp = (op === "contains" ? "like" : op) as
-      | "like"
-      | "="
-      | ">"
-      | ">="
-      | "<"
-      | "<=";
-    const filterVal = op === "contains" ? `%${filter.value}%` : filter.value;
-    const isNumericValue = /^-?[0-9]+(\.[0-9]+)?$/.test(filter.value);
-    const isComparisonOp = kyselyOp !== "like" && kyselyOp !== "=";
-
-    const rows = await this._db
-      .selectFrom("log_attr")
-      .select("log_id")
-      .where("val_name", "=", filter.key)
-      .where("logged_timestamp", ">=", start)
-      .where("logged_timestamp", "<=", end)
-      .$call((qb) => {
-        if (kyselyOp === "like") {
-          return qb.where("val", "like", filterVal);
-        }
-        if (isComparisonOp && isNumericValue) {
-          const numVal = parseFloat(filter.value);
-          return qb.where((eb) =>
-            eb.and([
-              sql<boolean>`val ~ '^-?[0-9]+(\\.[0-9]+)?$'`,
-              sql<boolean>`val::numeric ${sql.raw(kyselyOp)} ${sql.lit(numVal)}::numeric`,
-            ]),
-          );
-        }
-        return qb.where("val", kyselyOp, filterVal);
-      })
-      .execute();
-
-    return new Set(rows.map((r) => r.log_id));
-  }
-
-  private async _resolveKeyFilterIds(
-    keyFilters: NonNullable<PostgresQueryOptions["attributeFilters"]>,
-    start: Date,
-    end: Date,
-  ): Promise<{ includeIds: string[] | null; excludeIds: Set<string> }> {
-    const positiveFilters = keyFilters.filter((f) => !f.negated);
-    const negatedFilters = keyFilters.filter((f) => f.negated);
-
-    const excludeIds = new Set<string>();
-    for (const filter of negatedFilters) {
-      const ids = await this._fetchMatchingIds(filter, start, end);
-      for (const id of ids) excludeIds.add(id);
-    }
-
-    if (positiveFilters.length === 0) {
-      return { includeIds: null, excludeIds };
-    }
-
-    let intersection: Set<string> | null = null;
-    for (const filter of positiveFilters) {
-      const ids = await this._fetchMatchingIds(filter, start, end);
-      if (intersection === null) {
-        intersection = ids;
-      } else {
-        for (const id of intersection) {
-          if (!ids.has(id)) intersection.delete(id);
-        }
-      }
-      if (intersection.size === 0) return { includeIds: [], excludeIds };
-    }
-
-    return { includeIds: intersection ? [...intersection] : null, excludeIds };
   }
 
   private async _parseLogs(opts: {

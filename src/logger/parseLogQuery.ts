@@ -260,6 +260,22 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
 type ParseResult<T> = Result<T, typeof QUERY_SYNTAX_ERROR>;
 
 /**
+ * Semantic validation for a built-in field leaf. `timestamp` maps to the real
+ * `logs.logged_timestamp` column, so its value must be a parseable ISO/RFC date
+ * or date-time — an unparseable value is a syntax error here rather than a query
+ * that silently matches nothing.
+ */
+function validateBuiltinLeaf(token: LogQueryToken): ParseError | null {
+  if (token.key === "timestamp" && isNaN(new Date(token.value).getTime())) {
+    return syntaxError(
+      `invalid timestamp value ${JSON.stringify(token.value)} — ` +
+        `expected an ISO/RFC date or date-time (e.g. '2003-01-02' or '2003-01-02T09:30:00Z')`,
+    );
+  }
+  return null;
+}
+
+/**
  * Parse a single term into the list of nodes it contributes to its parent OR
  * chain. A filter yields one leaf; a parenthesized group yields either its
  * spliced OR-terms (a redundant pure-OR group dissolves) or a single nested
@@ -290,7 +306,10 @@ function parseTerm(cur: Cursor): ParseResult<FilterExpr[]> {
   }
 
   const token = parseFilter(cur);
-  return { ok: true, val: token === null ? [] : [{ type: "filter", filter: token }] };
+  if (token === null) return { ok: true, val: [] };
+  const invalid = validateBuiltinLeaf(token);
+  if (invalid) return invalid;
+  return { ok: true, val: [{ type: "filter", filter: token }] };
 }
 
 /** Parse an OR-chain: terms joined by `||`. Malformed `||` usage is an error. */

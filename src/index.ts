@@ -23,7 +23,6 @@ export type {
   LogLevelFilter,
   QueryError,
   PurgeError,
-  AttributeFilter,
   LogLevel,
   LogLevels,
   AdapterWarning,
@@ -39,9 +38,16 @@ export type { Logger, LoggerOptions, ProcessEvent } from "./logger/logger";
 export { ConsoleAdapter } from "./logger/console-adapter";
 export type { ConsoleAdapterOptions } from "./logger/console-adapter";
 
-// Secure wrapper
-export { secure, isSecure, defaultSerializer } from "./logger/template";
-export type { Secure, ValueSerializer } from "./logger/template";
+// Secure / redact value wrappers
+export {
+  secure,
+  isSecure,
+  redact,
+  isRedacted,
+  REDACTED_PLACEHOLDER,
+  defaultSerializer,
+} from "./logger/template";
+export type { Secure, Redacted, ValueSerializer } from "./logger/template";
 
 // Shared utility types
 export type { Result, AsyncResult, Prettify } from "./types";

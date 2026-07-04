@@ -6,6 +6,10 @@ const nextConfig: NextConfig = {
   // Consume the library's shipped `dist` (linked via `link:..`) but let Next
   // process its "use client" component boundary.
   transpilePackages: ["@campfhir/bored-logs"],
+  compiler: {
+    // Keep `console.*` calls in production builds via SWC, so `ConsoleAdapter` output appears in browser devtools.
+    removeConsole: false,
+  },
   // Keep the native-ish Postgres driver out of the bundle; require it at runtime.
   serverExternalPackages: ["pg"],
   // This app is nested in the library repo; trace from the demo dir, not the

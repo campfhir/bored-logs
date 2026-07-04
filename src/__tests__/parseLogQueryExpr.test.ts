@@ -285,6 +285,39 @@ describe("parseLogQueryExpr — operator syntax errors", () => {
   }
 });
 
+describe("parseLogQueryExpr — built-in timestamp validation", () => {
+  const bad = [
+    "timestamp:'not-a-date'",
+    "timestamp:>'nope'",
+    "timestamp:<='2003-13-40'", // impossible calendar date
+    "timestamp:''", // empty value
+    "level:'error' timestamp:>'garbage'", // nested in an AND
+    "(timestamp:>'oops') || a:'1'", // nested in a group/OR
+  ];
+  for (const query of bad) {
+    it(`rejects ${JSON.stringify(query)} as a syntax error`, () => {
+      const r = parseLogQueryExpr(query);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.err.message).toBe(QUERY_SYNTAX_ERROR);
+        expect(r.err.cause?.message).toMatch(/timestamp value/);
+      }
+    });
+  }
+
+  const good = [
+    "timestamp:'2003-01-02'",
+    "timestamp:>'2003-01-02'",
+    "timestamp:<='2024-06-01T12:00:00Z'",
+    "timestamp:>='2024-06-01T12:00:00.500+02:00'",
+  ];
+  for (const query of good) {
+    it(`accepts ${JSON.stringify(query)}`, () => {
+      expect(parseLogQueryExpr(query).ok).toBe(true);
+    });
+  }
+});
+
 describe("formatExpr", () => {
   it("formats a single filter with no wrappers", () => {
     expect(formatExpr(q(f("level", "contains", "error")))).toBe("level:'error'");

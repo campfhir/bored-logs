@@ -16,6 +16,36 @@ export const isSecure = (v: unknown): v is Secure<unknown> =>
   (v as any)._secure === true;
 
 // ---------------------------------------------------------------------------
+// Redact wrapper — marks a value that may be shown in *local* output (e.g. the
+// browser console) but must never be shipped to the server or persisted in
+// plaintext. Contrast with `secure()`, which is transmitted to your server so
+// it can be encrypted at rest. `redact()` is the "this never leaves the box"
+// primitive: at every transmit/persist boundary its value is replaced with
+// {@link REDACTED_PLACEHOLDER} (or omitted).
+// ---------------------------------------------------------------------------
+
+/** The literal substituted for a {@link Redacted} value wherever it would otherwise be shipped or stored. */
+export const REDACTED_PLACEHOLDER = "**REDACTED**";
+
+/** A value marked as redact-on-transmit: visible in local output, scrubbed (or omitted) before it is shipped or persisted. */
+export type Redacted<T> = { readonly __redacted: true; readonly value: T };
+
+/**
+ * Wrap a value so it is visible in local/console output but scrubbed to
+ * {@link REDACTED_PLACEHOLDER} (or omitted) before it is shipped to the server
+ * or written to a persistent adapter. Use for data that is useful while
+ * debugging in the browser but must never be transmitted or stored.
+ */
+export const redact = <T>(value: T): Redacted<T> => ({ __redacted: true, value });
+
+/** Type guard: true when the value is a {@link Redacted} wrapper. */
+export const isRedacted = (v: unknown): v is Redacted<unknown> =>
+  typeof v === "object" &&
+  v !== null &&
+  "__redacted" in v &&
+  (v as any).__redacted === true;
+
+// ---------------------------------------------------------------------------
 // Template key extraction — pulls {key} placeholder names out of a string.
 // ---------------------------------------------------------------------------
 
@@ -60,16 +90,18 @@ export const defaultSerializer: ValueSerializer = (val) => {
   return String(val);
 };
 
-/** Replace `{key}` tokens with serialized `attrs` values; secure values render as `[secure]` and missing keys stay literal. */
+/** Replace `{key}` tokens with serialized `attrs` values; secure values render as `[secure]`, redacted values as `redactPlaceholder`, and missing keys stay literal. */
 export function interpolate(
   template: string,
   attrs: Record<string, unknown>,
   serialize: ValueSerializer = defaultSerializer,
+  redactPlaceholder: string = REDACTED_PLACEHOLDER,
 ): string {
   return template.replace(/\{(\w+)\}/g, (_, key: string) => {
     const val = attrs[key];
     if (val === undefined) return `{${key}}`;
     if (isSecure(val)) return "[secure]";
+    if (isRedacted(val)) return redactPlaceholder;
     return serialize(val);
   });
 }

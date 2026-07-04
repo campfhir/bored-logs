@@ -29,6 +29,7 @@ function rec(
   level: string,
   message: string,
   attrs: Record<string, unknown>,
+  timestamp: Date = new Date(),
 ): LogRecord {
   return {
     level,
@@ -36,7 +37,7 @@ function rec(
     template: message,
     secureMessage: false,
     attrs,
-    timestamp: new Date(),
+    timestamp,
   };
 }
 
@@ -54,6 +55,26 @@ async function search(query: string): Promise<string[]> {
   if (!res.ok) throw res.err;
   return res.val.map((row: LogRow) => row.message).sort();
 }
+
+/** As `search`, but over an explicit (wide) date window rather than the default 24h. */
+async function searchWindow(
+  query: string,
+  start: string,
+  end: string,
+): Promise<string[]> {
+  const parsed = parseLogQueryExpr(query);
+  if (!parsed.ok) throw parsed.err;
+  const res = await adapter.query({
+    attributeFilter: parsed.val ?? undefined,
+    start,
+    end,
+  });
+  if (!res.ok) throw res.err;
+  return res.val.map((row: LogRow) => row.message).sort();
+}
+
+const WIDE_START = "1970-01-01T00:00:00.000Z";
+const WIDE_END = "2100-01-01T00:00:00.000Z";
 
 beforeAll(async () => {
   db = new Kysely<any>({
@@ -160,6 +181,73 @@ describe("PostgresAdapter e2e — write + query round-trip", () => {
 
   it("a contradictory filter returns zero rows", async () => {
     expect(await search("count:>'10' count:<'3'")).toEqual([]);
+  });
+
+  it("filters on the built-in level field (case-insensitive) via the query bar", async () => {
+    // `level:` is a real column, not a stored attribute — must match logs.level.
+    expect(await search("level:'error'")).toEqual(["db connection failed"]);
+    expect(await search("level:='info'")).toEqual(["cache miss", "user login"]);
+  });
+});
+
+describe("PostgresAdapter e2e — built-in timestamp field", () => {
+  beforeEach(async () => {
+    // Write through the normal path with explicit instants (as node-pg Dates),
+    // so the query param and stored value serialize identically — the boundary
+    // stays exact even though the column is `timestamp without time zone`.
+    await seed(
+      rec("info", "ancient", {}, new Date("2003-01-01T09:00:00Z")),
+      rec("info", "midday", {}, new Date("2003-06-15T12:00:00Z")),
+      rec("info", "recent", {}, new Date("2020-01-01T00:00:00Z")),
+    );
+  });
+
+  it("`timestamp:>` filters chronologically on logs.logged_timestamp", async () => {
+    expect(await searchWindow("timestamp:>'2010-01-01'", WIDE_START, WIDE_END)).toEqual(["recent"]);
+  });
+
+  it("`timestamp:<` filters chronologically on logs.logged_timestamp", async () => {
+    expect(await searchWindow("timestamp:<'2010-01-01'", WIDE_START, WIDE_END)).toEqual([
+      "ancient",
+      "midday",
+    ]);
+  });
+
+  it("a bare `timestamp:` date matches the whole calendar day", async () => {
+    expect(await searchWindow("timestamp:'2003-06-15'", WIDE_START, WIDE_END)).toEqual(["midday"]);
+    expect(await searchWindow("timestamp:'2003-06-16'", WIDE_START, WIDE_END)).toEqual([]);
+  });
+
+  it("compares against a full ISO/RFC datetime, not just a date", async () => {
+    // 2003-06-15T12:00Z is the 'midday' row; strictly-after excludes it.
+    expect(await searchWindow("timestamp:>'2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
+      "recent",
+    ]);
+    expect(await searchWindow("timestamp:>='2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
+      "midday",
+      "recent",
+    ]);
+  });
+
+  it("rejects an unparseable timestamp value as a syntax error (never reaches the DB)", () => {
+    const parsed = parseLogQueryExpr("timestamp:>'not-a-date'");
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.err.cause?.message).toMatch(/timestamp value/);
+  });
+});
+
+describe("PostgresAdapter e2e — date/time attribute values", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("info", "deploy jan", { deployedAt: "2003-01-01T00:00:00Z" }),
+      rec("info", "deploy jun", { deployedAt: "2003-06-01T00:00:00Z" }),
+      rec("info", "deploy dec", { deployedAt: "2003-12-01T00:00:00Z" }),
+    );
+  });
+
+  it("compares ISO date attribute values chronologically, not lexically", async () => {
+    expect(await search("deployedAt:>'2003-03-01'")).toEqual(["deploy dec", "deploy jun"]);
+    expect(await search("deployedAt:<'2003-03-01'")).toEqual(["deploy jan"]);
   });
 });
 

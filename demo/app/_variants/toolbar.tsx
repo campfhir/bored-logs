@@ -6,6 +6,7 @@ import { LogSearchSyntaxHelp } from "@campfhir/bored-logs/components";
 import {
   useLogQuery,
   SimulatePanel,
+  ClientLogPanel,
   LevelFilter,
   SearchField,
   DateRangeField,
@@ -30,8 +31,18 @@ export default function ToolbarVariant({ initialLogs }: { initialLogs: LogRow[] 
       </header>
 
       <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/50">
-        <SectionLabel>Simulate log activity</SectionLabel>
+        <SectionLabel>Simulate log activity (server)</SectionLabel>
         <SimulatePanel q={q} className="mt-3" />
+      </section>
+
+      <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/50">
+        <SectionLabel>Ship client-side logs (useLogger)</SectionLabel>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          These originate in your browser via <code>useLogger()</code>, batch on the client, then
+          POST to <code>/api/logs</code>. Open devtools: <code>secure()</code> and <code>redact()</code>{" "}
+          show their real values in the console, but the shipped &amp; stored record masks them.
+        </p>
+        <ClientLogPanel q={q} className="mt-3" />
       </section>
 
       <section className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-3">

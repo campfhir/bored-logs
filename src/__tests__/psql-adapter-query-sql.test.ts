@@ -293,4 +293,98 @@ describe("PostgresAdapter.query — generated SQL for the attributeFilter tree",
     const q = compiled.find((c) => /"level" in \(/.test(c.sql))!;
     expect(q.sql).not.toMatch(/exists \(/i);
   });
+
+  it("compiles an attribute date comparison with a timestamptz cast guarded by a regex", async () => {
+    const q = await mainQuery("deployedAt:>'2003-01-02'");
+    expect(q.sql).toMatch(/::timestamptz/);
+    expect(q.sql).toMatch(/~/); // regex guard so non-date values don't error
+    // The value is bound (as a string) and cast, not lexically compared.
+    expect(strParams(q)).toContain("2003-01-02");
+  });
+});
+
+describe("PostgresAdapter.query — built-in timestamp/level fields (not attributes)", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    // Wide window so a `timestamp:` predicate isn't masked by the default range.
+    await adapter.query({
+      attributeFilter: parsed.val ?? undefined,
+      start: "1970-01-01T00:00:00.000Z",
+      end: "2100-01-01T00:00:00.000Z",
+    });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+  const strParams = (q: CompiledQuery): string[] =>
+    q.parameters.filter((p): p is string => typeof p === "string");
+  // Bound Date params. The window always binds two (start/end); a `timestamp:`
+  // predicate binds more — so a count > 2 proves the value hit the real column.
+  const dateParamCount = (q: CompiledQuery): number =>
+    q.parameters.filter((p) => p instanceof Date).length;
+
+  it("compiles `timestamp:>` against logs.logged_timestamp, not an attribute EXISTS", async () => {
+    const q = await mainQuery("timestamp:>'2003-01-02T00:00:00Z'");
+    // `> $n` (strict) — distinct from the window's `>= $n`.
+    expect(q.sql).toMatch(/"logs"\."logged_timestamp" > \$/);
+    // Not routed to log_attr with val_name = 'timestamp'.
+    expect(q.sql).not.toMatch(/exists \(/i);
+    // The value is bound as a Date (window ×2 + predicate), not the "timestamp" text.
+    expect(strParams(q)).not.toContain("timestamp");
+    expect(dateParamCount(q)).toBe(3);
+  });
+
+  it("treats a bare `timestamp:` date as the whole calendar day (range, not equality)", async () => {
+    const q = await mainQuery("timestamp:'2003-01-02'");
+    expect(q.sql).not.toMatch(/exists \(/i);
+    // Two extra Date params beyond the window: day start and day+1.
+    expect(dateParamCount(q)).toBe(4);
+  });
+
+  it("supports the full comparison range on timestamp", async () => {
+    for (const op of [">", ">=", "<", "<="]) {
+      const cap = makeCapturingDb();
+      const a = new PostgresAdapter({ db: cap.db });
+      const parsed = parseLogQueryExpr(`timestamp:${op}'2003-01-02T00:00:00Z'`);
+      if (!parsed.ok) throw parsed.err;
+      await a.query({
+        attributeFilter: parsed.val ?? undefined,
+        start: "1970-01-01T00:00:00.000Z",
+        end: "2100-01-01T00:00:00.000Z",
+      });
+      const q = cap.compiled.find((c) => /"level" in \(/.test(c.sql))!;
+      expect(q.sql).not.toMatch(/exists \(/i);
+      // Window's two Dates + one for the comparison value.
+      expect(q.parameters.filter((p) => p instanceof Date)).toHaveLength(3);
+      await a.close();
+    }
+  });
+
+  it("compiles `level:` against logs.level (uppercased), not an attribute EXISTS", async () => {
+    const q = await mainQuery("level:='error'");
+    expect(q.sql).toMatch(/"logs"\."level" = \$\d+/);
+    expect(q.sql).not.toMatch(/exists \(/i);
+    expect(strParams(q)).toContain("ERROR");
+  });
+
+  it("compiles a negated `timestamp:` leaf (via !=) to a NOT comparison, no EXISTS", async () => {
+    const q = await mainQuery("timestamp:!='2003-01-02'");
+    expect(q.sql).toMatch(/not /i);
+    expect(q.sql).not.toMatch(/exists \(/i);
+    expect(dateParamCount(q)).toBe(4); // window ×2 + day-range ×2, negated
+  });
 });

@@ -6,11 +6,11 @@ import { LOG_LEVELS } from "../logger/adapter";
 // ---------------------------------------------------------------------------
 // LogLevelFilter
 //
-// A dedicated control for the log *level*, which is a first-class column with
-// its own query option — NOT an attribute. Selecting levels here produces the
-// array you pass to `query({ levels })`; it deliberately does not go through
-// the free-text search bar / `attributeFilter`, where `level:'…'` would search
-// a (non-existent) `level` attribute instead of the level column.
+// A dedicated control for the log *level*. Selecting levels here produces the
+// array you pass to `query({ levels })`, which expands to a level *set* and
+// supports severity thresholds (`minLevel`). A `level:'…'` term in the search
+// bar / `attributeFilter` does match the level column now, but only as an exact
+// match — this control is the way to select multiple levels or "warn and above".
 //
 // Style-less like the other components: a `role="group"` of toggle buttons,
 // each carrying `data-level` and `data-selected` hooks. Controlled — you own

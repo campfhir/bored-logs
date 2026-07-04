@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ConsoleAdapter } from "../logger/console-adapter";
 import type { LogRecord } from "../logger/adapter";
-import { secure } from "../logger/template";
+import { secure, redact } from "../logger/template";
 
 function makeRecord(overrides: Partial<LogRecord> = {}): LogRecord {
   return {
@@ -104,10 +104,11 @@ describe("ConsoleAdapter", () => {
     expect(line).toContain("count=3");
   });
 
-  it("redacts Secure attr values", () => {
+  it("masks Secure attr values on the server (maskSecure: true)", () => {
     const adapter = new ConsoleAdapter({
       showTimestamp: false,
       showLevel: false,
+      maskSecure: true,
     });
     adapter.write(makeRecord({ attrs: { ssn: secure("123-45-6789") } }));
     const line = consoleSpy.mock.calls[0][0];
@@ -115,10 +116,65 @@ describe("ConsoleAdapter", () => {
     expect(line).not.toContain("123-45-6789");
   });
 
-  it("shows [secure message] for secure templates", () => {
+  it("reveals Secure attr values in the browser console (maskSecure: false)", () => {
     const adapter = new ConsoleAdapter({
       showTimestamp: false,
       showLevel: false,
+      maskSecure: false,
+    });
+    adapter.write(makeRecord({ attrs: { ssn: secure("123-45-6789") } }));
+    const line = consoleSpy.mock.calls[0][0];
+    expect(line).toContain("ssn=123-45-6789");
+    expect(line).not.toContain("[secure]");
+  });
+
+  it("reveals a secure message template in the browser (maskSecure: false)", () => {
+    const adapter = new ConsoleAdapter({
+      showTimestamp: false,
+      showLevel: false,
+      maskSecure: false,
+    });
+    adapter.write(
+      makeRecord({
+        secureMessage: true,
+        template: "SSN {ssn}",
+        message: "[secure]",
+        attrs: { ssn: secure("123-45-6789") },
+      }),
+    );
+    const line = consoleSpy.mock.calls[0][0];
+    expect(line).toContain("SSN 123-45-6789");
+    expect(line).not.toContain("[secure]");
+  });
+
+  it("shows the real value for redact() attributes in local console output", () => {
+    const adapter = new ConsoleAdapter({
+      showTimestamp: false,
+      showLevel: false,
+      maskSecure: false,
+    });
+    adapter.write(makeRecord({ attrs: { token: redact("t0k3n") } }));
+    const line = consoleSpy.mock.calls[0][0];
+    expect(line).toContain("token=t0k3n");
+  });
+
+  it("masks redact() attributes on the server (maskSecure: true)", () => {
+    const adapter = new ConsoleAdapter({
+      showTimestamp: false,
+      showLevel: false,
+      maskSecure: true,
+    });
+    adapter.write(makeRecord({ attrs: { token: redact("t0k3n") } }));
+    const line = consoleSpy.mock.calls[0][0];
+    expect(line).toContain("token=**REDACTED**");
+    expect(line).not.toContain("t0k3n");
+  });
+
+  it("shows [secure message] for secure templates on the server (maskSecure: true)", () => {
+    const adapter = new ConsoleAdapter({
+      showTimestamp: false,
+      showLevel: false,
+      maskSecure: true,
     });
     adapter.write(makeRecord({ secureMessage: true, message: "[secure]" }));
     expect(consoleSpy.mock.calls[0][0]).toContain("[secure message]");

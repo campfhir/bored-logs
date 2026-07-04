@@ -182,6 +182,35 @@ export class LoggerInstance<TLevels extends Record<string, number> = typeof LOG_
     }
   }
 
+  /**
+   * Ingest an already-formed {@link LogRecord} — applies the level gate and
+   * buffering, then dispatches to every adapter **without re-interpolating**.
+   *
+   * Use this for records produced elsewhere and handed to the logger verbatim,
+   * such as entries shipped from a browser client via
+   * `createLogIngestHandler`. The record's `message`, `attrs`, and `timestamp`
+   * are preserved as-is; `application`/`version` are taken from the record (the
+   * logger's own defaults are *not* applied, since the record is already
+   * complete). Compare with {@link log}, which builds and interpolates a record
+   * from a template.
+   */
+  ingest(record: LogRecord): void {
+    const levelNum = this._levels[record.level.toLowerCase()] ?? this._levels.debug;
+    const thresholdNum = this._levels[this._level.toLowerCase()] ?? this._levels.info;
+    if (levelNum > thresholdNum) return;
+
+    if (this._adapters.length === 0) {
+      if (this._buffer.length < this._bufferLimit) {
+        this._buffer.push(record);
+      }
+      return;
+    }
+
+    for (const adapter of this._adapters) {
+      this._dispatch(adapter, record);
+    }
+  }
+
   private _dispatch(adapter: LogAdapter, record: LogRecord): void {
     try {
       const result = adapter.write(record);

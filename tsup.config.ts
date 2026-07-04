@@ -17,6 +17,7 @@ export default defineConfig([
   {
     entry: {
       index: "src/index.ts",
+      "server/index": "src/server/index.ts",
     },
     format: ["esm", "cjs"],
     dts: true,
@@ -31,6 +32,9 @@ export default defineConfig([
     entry: {
       "adapters/psql": "src/adapters/psql/adapter.ts",
       "adapters/psql/migration": "src/adapters/psql/migration/index.ts",
+      // Universal (browser + Node/Edge) — ships log batches over HTTP. No banner:
+      // it uses only fetch/navigator/timers and imports no React.
+      "adapters/http": "src/adapters/http/adapter.ts",
     },
     format: ["esm", "cjs"],
     dts: true,
@@ -45,6 +49,7 @@ export default defineConfig([
   {
     entry: {
       "components/index": "src/components/index.ts",
+      "client/index": "src/client/index.ts",
     },
     format: ["esm", "cjs"],
     dts: true,

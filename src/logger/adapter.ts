@@ -100,19 +100,6 @@ export type LogRow = {
 };
 
 // ---------------------------------------------------------------------------
-// AttributeFilter — used in LogQueryOptions and by PostgresAdapter.
-// ---------------------------------------------------------------------------
-
-/** A single attribute comparison applied to a query's `meta` fields. */
-export type AttributeFilter = {
-  key: string;
-  operator: "contains" | "=" | ">" | ">=" | "<" | "<=";
-  value: string;
-  /** When true, the filter is negated (NOT LIKE / NOT IN). */
-  negated?: boolean;
-};
-
-// ---------------------------------------------------------------------------
 // LogQueryOptions — options accepted by QueryableLogAdapter.query().
 // ---------------------------------------------------------------------------
 
@@ -144,14 +131,11 @@ export type LogQueryOptions = {
   offset?: number;
   sort?: "asc" | "desc";
   /**
-   * Flat attribute filters, all ANDed together. Back-compat with the pre-OR
-   * query API; prefer {@link attributeFilter} for anything involving OR.
-   */
-  attributeFilters?: AttributeFilter[];
-  /**
-   * Boolean attribute-filter tree (AND / OR / grouping) as produced by
-   * `parseLogQueryExpr`. When present it is ANDed with the timestamp range,
-   * the `message` term, the level filter, and any `attributeFilters`.
+   * Boolean filter tree (AND / OR / grouping) as produced by
+   * `parseLogQueryExpr`. Matches attributes, the `message` column, and the
+   * built-in `timestamp` / `level` columns (see the query-syntax docs). When
+   * present it is ANDed with the timestamp range, the `message` term, and the
+   * level filter.
    */
   attributeFilter?: FilterExpr;
 } & LogLevelFilter;

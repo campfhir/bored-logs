@@ -20,6 +20,7 @@ import type {
   LogDateRange,
 } from "@campfhir/bored-logs/components";
 import type { FilterExpr, LogRow } from "@campfhir/bored-logs";
+import { useLogger, useLogShipper, secure, redact } from "@campfhir/bored-logs/client";
 import { simulate, search, purge } from "../actions";
 import { SCENARIOS } from "@/lib/scenarios";
 
@@ -144,6 +145,104 @@ export function SimulatePanel({ q, className }: { q: LogQuery; className?: strin
           {q.busy === s.id ? "…" : s.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ClientLogPanel — logs that originate in the browser via `useLogger`, are
+// batched by the client's HttpAdapter, then shipped to /api/logs where the
+// server logger writes them to the same Postgres table.
+// ---------------------------------------------------------------------------
+
+const clientBtn =
+  "rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 transition hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:bg-slate-800";
+
+export function ClientLogPanel({ q, className }: { q: LogQuery; className?: string }) {
+  const logger = useLogger();
+  const shipper = useLogShipper();
+  const [queued, setQueued] = useState(0);
+  const [shipping, setShipping] = useState(false);
+
+  const rnd = () => Math.floor(Math.random() * 400) + 20;
+
+  // Each button emits through the same typed template API as the server logger.
+  const actions: { label: string; hint: string; run: () => void }[] = [
+    {
+      label: "Page view",
+      hint: "info — a plain browser event",
+      run: () =>
+        logger.info("Browser opened the {view} view", {
+          view: "demo", service: "browser", statusCode: 200, latencyMs: rnd(),
+        }),
+    },
+    {
+      label: "Slow UI",
+      hint: "warn",
+      run: () =>
+        logger.warn("Slow interaction: {latencyMs}ms to render", {
+          service: "browser", statusCode: 200, latencyMs: 1200 + rnd(),
+        }),
+    },
+    {
+      label: "Caught error",
+      hint: "error",
+      run: () =>
+        logger.error("Client exception: {error}", {
+          error: "TypeError: cannot read 'id' of undefined",
+          service: "browser", statusCode: 500, latencyMs: rnd(),
+        }),
+    },
+    {
+      label: "secure() token",
+      hint: "shipped tagged → encrypted at rest; real value shown in the browser console",
+      run: () =>
+        logger.info("Session token minted {token}", {
+          token: secure(`tok_${Math.random().toString(36).slice(2, 10)}`),
+          service: "browser", statusCode: 200, latencyMs: rnd(),
+        }),
+    },
+    {
+      label: "redact() card",
+      hint: "never leaves the browser in plaintext — stored as **REDACTED**",
+      run: () =>
+        logger.warn("Card entered: {card}", {
+          card: redact("4111 1111 1111 1111"),
+          service: "browser", statusCode: 402, latencyMs: rnd(),
+        }),
+    },
+  ];
+
+  async function shipNow() {
+    setShipping(true);
+    await shipper.flush();
+    setQueued(0);
+    q.reload();
+    setShipping(false);
+  }
+
+  return (
+    <div className={`flex flex-wrap items-center gap-2 ${className ?? ""}`}>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          title={a.hint}
+          onClick={() => {
+            a.run();
+            setQueued(shipper.pending);
+          }}
+          className={clientBtn}
+        >
+          {a.label}
+        </button>
+      ))}
+      <button
+        disabled={queued === 0 || shipping}
+        onClick={shipNow}
+        className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-sm font-medium text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-300"
+      >
+        {shipping ? "Shipping…" : `Ship ${queued} queued log${queued === 1 ? "" : "s"} → server`}
+      </button>
     </div>
   );
 }

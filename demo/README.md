@@ -10,7 +10,16 @@ adapter and the React UI components (`LogSearchBar`, `LogTable`,
 ## What it demonstrates
 
 - **Simulate buttons** write batches of realistic logs (login flows, checkout,
-  error bursts, slow requests, random traffic) at every level.
+  error bursts, slow requests, random traffic) at every level — these run in a
+  **server action**.
+- **Ship client-side logs** — a second panel logs from the browser with the
+  `useLogger` hook. `LoggerProvider` (in `app/_components/logger-provider.tsx`)
+  builds a client `Logger` that writes to the browser console *and* batches
+  records to the `POST /api/logs` route (`createLogIngestHandler`, in
+  `app/api/logs/route.ts`), which feeds them into the same server logger +
+  Postgres adapter. The `secure()` / `redact()` buttons show the split: both
+  print their real value to the browser console, but the shipped-and-stored
+  record masks them (`[secure]` / `**REDACTED**`).
 - **Boolean search** — the `LogSearchBar` parses `||` / `&&` / `()` into a
   `FilterExpr` tree that drives the SQL (`level:'error' (service:'db' || service:'payments')`).
   Syntax errors and contradictory filters are flagged (debounced).

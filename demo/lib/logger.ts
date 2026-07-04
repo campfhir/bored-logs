@@ -1,6 +1,9 @@
 import { Kysely, PostgresDialect } from "kysely";
-import { createLogger } from "@campfhir/bored-logs";
-import { PostgresAdapter, createLoggerPool } from "@campfhir/bored-logs/adapters/psql";
+import { ConsoleAdapter, createLogger } from "@campfhir/bored-logs";
+import {
+  PostgresAdapter,
+  createLoggerPool,
+} from "@campfhir/bored-logs/adapters/psql";
 
 // ---------------------------------------------------------------------------
 // A single process-wide logger + Postgres adapter, cached on globalThis so
@@ -30,8 +33,12 @@ function init(): BoredLogs {
 
   // level "debug" so every simulated entry, down to debug, is persisted.
   const adapter = new PostgresAdapter({ db, level: "debug" });
-  const logger = createLogger({ level: "debug", application: "bored-logs-demo" });
+  const logger = createLogger({
+    level: "debug",
+    application: "bored-logs-demo",
+  });
   logger.addAdapter(adapter);
+  logger.addAdapter(new ConsoleAdapter());
 
   return { db, adapter, logger, ready: adapter.migrate() };
 }

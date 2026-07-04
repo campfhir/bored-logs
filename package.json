@@ -16,10 +16,25 @@
       "import": "./dist/components/index.mjs",
       "require": "./dist/components/index.js"
     },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.mjs",
+      "require": "./dist/client/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.mjs",
+      "require": "./dist/server/index.js"
+    },
     "./adapters/psql": {
       "types": "./dist/adapters/psql.d.ts",
       "import": "./dist/adapters/psql.mjs",
       "require": "./dist/adapters/psql.js"
+    },
+    "./adapters/http": {
+      "types": "./dist/adapters/http.d.ts",
+      "import": "./dist/adapters/http.mjs",
+      "require": "./dist/adapters/http.js"
     },
     "./adapters/psql/migration": {
       "types": "./dist/adapters/psql/migration.d.ts",
@@ -32,8 +47,17 @@
       "components": [
         "./dist/components/index.d.ts"
       ],
+      "client": [
+        "./dist/client/index.d.ts"
+      ],
+      "server": [
+        "./dist/server/index.d.ts"
+      ],
       "adapters/psql": [
         "./dist/adapters/psql.d.ts"
+      ],
+      "adapters/http": [
+        "./dist/adapters/http.d.ts"
       ],
       "adapters/psql/migration": [
         "./dist/adapters/psql/migration.d.ts"
