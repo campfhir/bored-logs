@@ -99,11 +99,19 @@
   box-shadow: var(--bl-shadow);
 }
 .log-search [role="option"] {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
   cursor: pointer; border-radius: 0.375rem; padding: 0.375rem 0.5rem;
   font-size: 0.8125rem; color: var(--bl-text); font-family: ui-monospace, monospace;
 }
 .log-search [role="option"]:hover,
 .log-search [role="option"][data-selected] { background: var(--bl-hover); }
+/* Built-in fields (timestamp/level/message) read distinctly from attributes. */
+.log-search [role="option"][data-kind="builtin"] { color: var(--bl-chip-text); }
+.log-search [data-log-search-suggestion-builtin] {
+  font-family: system-ui, sans-serif; font-size: 0.625rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--bl-muted);
+  border: 1px solid var(--bl-border); border-radius: 0.25rem; padding: 0 0.25rem;
+}
 
 .log-search [data-log-search-error],
 .log-search [data-log-search-warning] { flex-basis: 100%; font-size: 0.8125rem; padding-top: 0.125rem; }
@@ -139,6 +147,26 @@
 .dark .log-levels button[data-selected][data-level="info" i]  { color: var(--color-emerald-200); }
 .dark .log-levels button[data-selected][data-level="warn" i]  { color: var(--color-amber-200); }
 .dark .log-levels button[data-selected][data-level="error" i] { color: var(--color-red-200); }
+
+/* --- LogDateRangePicker --------------------------------------------------- */
+.log-daterange [data-log-date-range] {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+}
+.log-daterange [data-log-date-range-quick] { display: inline-flex; flex-wrap: wrap; gap: 0.375rem; }
+.log-daterange [data-log-date-range-quick] button {
+  cursor: pointer; border-radius: 9999px; border: 1px solid var(--bl-border); background: transparent;
+  padding: 0.1875rem 0.625rem; font-size: 0.75rem; font-weight: 500; color: var(--bl-muted); transition: all 0.1s;
+}
+.log-daterange [data-log-date-range-quick] button:hover { border-color: var(--color-slate-400); color: var(--bl-text); }
+.log-daterange [data-log-date-range-custom] { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.log-daterange label { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; color: var(--bl-muted); }
+.log-daterange input[type="datetime-local"] {
+  border-radius: 0.5rem; border: 1px solid var(--bl-border); background: var(--bl-input);
+  padding: 0.3rem 0.5rem; color: var(--bl-text); font-size: 0.8125rem;
+}
+.dark .log-daterange input[type="datetime-local"] { color-scheme: dark; }
+.log-daterange input[aria-invalid="true"] { border-color: var(--color-red-500); }
+.log-daterange [data-log-date-range-error] { flex-basis: 100%; color: var(--color-red-500); font-size: 0.8125rem; }
 
 /* --- Level badges (shared by LogTable + LogCard) -------------------------- */
 .log-table [data-level],
@@ -182,6 +210,11 @@
 .log-table [data-column="service"]    { width: 8rem; }
 .log-table [data-column="statusCode"] { width: 6rem; }
 .log-table [data-column="latencyMs"]  { width: 7rem; }
+
+/* Dense modifier used by the Compact layout variant. */
+.log-table-dense table { font-size: 0.8125rem; }
+.log-table-dense thead th { padding: 0.375rem 0.625rem; }
+.log-table-dense tbody td { padding: 0.3125rem 0.625rem; }
 
 .log-table [data-expanded] td { background: var(--bl-surface-2); white-space: normal; }
 .log-table [data-expanded] pre {

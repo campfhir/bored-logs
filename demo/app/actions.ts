@@ -32,6 +32,7 @@ export async function search(
   expr: FilterExpr | null,
   levels: string[],
   sort: "asc" | "desc",
+  range?: { start?: string | null; end?: string | null },
 ): Promise<LogRow[]> {
   const { adapter } = await ensureBoredLogs();
 
@@ -41,6 +42,10 @@ export async function search(
     // Values are validated against LOG_LEVELS in splitLevelTerms / the filter UI.
     levels: allLevels.length ? (allLevels as LogLevel[]) : undefined,
     attributeFilter: filter ?? undefined,
+    // From <LogDateRangePicker>. Omitting both falls back to the adapter's
+    // default window (the last 24 hours).
+    start: range?.start ?? undefined,
+    end: range?.end ?? undefined,
     sort,
     limit: 200,
   });

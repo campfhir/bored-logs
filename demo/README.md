@@ -16,7 +16,16 @@ adapter and the React UI components (`LogSearchBar`, `LogTable`,
   Syntax errors and contradictory filters are flagged (debounced).
 - **LogTable** with level badges, custom columns (service / status / latency),
   and expandable rows showing the full attribute JSON.
+- **LogDateRangePicker** — start/end inputs (validated so start ≤ end) plus
+  "last X" quick presets, feeding `query({ start, end })`.
+- **Autocomplete** in the search bar that tags the built-in fields
+  (`timestamp` / `level` / `message`) distinctly from same-named attributes.
 - **PurgeLogsDialog** deleting everything before a chosen date.
+
+The same components are shown in three full-page **layout variants**, switchable
+from the top nav — **Toolbar** (`/`, filters stacked above results),
+**Sidebar** (`/split`, filters in a left rail), and **Compact** (`/compact`, one
+dense bar with quick-preset-only date ranges).
 
 ## Run it with Docker (recommended)
 
