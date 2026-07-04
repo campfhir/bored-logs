@@ -731,7 +731,7 @@ Renders a `<div role="group" data-log-level-filter>` of `<button>`s. Each button
 
 ### `LogDateRangePicker`
 
-A controlled, style-less date-range control. It pairs explicit start/end `datetime-local` inputs (validated so start is on or before end) with configurable quick "last X" presets, and emits ISO-8601 strings ready for `query({ start, end })`.
+A controlled, style-less date-range control. It pairs an explicit start/end range — a separate date and time input per bound, validated so start is on or before end — with configurable quick "last X" presets, and emits ISO-8601 strings ready for `query({ start, end })`. Picking a date defaults its time to the start (`00:00`) or end (`23:59`) of that day, so a date applies on its own without also setting a time (a single `datetime-local` reports nothing until both parts are filled).
 
 ```tsx
 import { LogDateRangePicker } from "@campfhir/bored-logs/components";
@@ -770,7 +770,7 @@ const quickRanges: QuickRange[] = [
 ];
 ```
 
-The default presets (`DEFAULT_QUICK_RANGES`) are last 15 min, hour, 24 hours, 7 days, and 30 days. An invalid range (start after end) surfaces a `role="alert"` message (`data-log-date-range-error`) and sets `aria-invalid` on both inputs; the presets group is a `<div role="group" data-log-date-range-quick>` and each input is `data-log-date-range-start` / `-end`.
+The default presets (`DEFAULT_QUICK_RANGES`) are last 15 min, hour, 24 hours, 7 days, and 30 days. An invalid range (start after end) surfaces a `role="alert"` message (`data-log-date-range-error`) and sets `aria-invalid` on the inputs; the presets group is a `<div role="group" data-log-date-range-quick>` and each bound is a `<div data-log-date-range-start>` / `-end` wrapping its date + time inputs.
 
 ### `LogSearchSyntaxHelp`
 

@@ -158,13 +158,18 @@
   padding: 0.1875rem 0.625rem; font-size: 0.75rem; font-weight: 500; color: var(--bl-muted); transition: all 0.1s;
 }
 .log-daterange [data-log-date-range-quick] button:hover { border-color: var(--color-slate-400); color: var(--bl-text); }
-.log-daterange [data-log-date-range-custom] { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.log-daterange label { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; color: var(--bl-muted); }
-.log-daterange input[type="datetime-local"] {
+.log-daterange [data-log-date-range-custom] { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.log-daterange [data-log-date-range-start],
+.log-daterange [data-log-date-range-end] { display: inline-flex; align-items: center; gap: 0.375rem; }
+.log-daterange [data-log-date-range-start] > span,
+.log-daterange [data-log-date-range-end] > span { font-size: 0.75rem; color: var(--bl-muted); }
+.log-daterange input[type="date"],
+.log-daterange input[type="time"] {
   border-radius: 0.5rem; border: 1px solid var(--bl-border); background: var(--bl-input);
   padding: 0.3rem 0.5rem; color: var(--bl-text); font-size: 0.8125rem;
 }
-.dark .log-daterange input[type="datetime-local"] { color-scheme: dark; }
+.dark .log-daterange input[type="date"],
+.dark .log-daterange input[type="time"] { color-scheme: dark; }
 .log-daterange input[aria-invalid="true"] { border-color: var(--color-red-500); }
 .log-daterange [data-log-date-range-error] { flex-basis: 100%; color: var(--color-red-500); font-size: 0.8125rem; }
 
