@@ -15,5 +15,9 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Live-DB throughput benchmarks — run via `pnpm bench:e2e` (needs `pnpm db:up`).
+    benchmark: {
+      include: ["src/**/*.e2e.bench.ts"],
+    },
   },
 });

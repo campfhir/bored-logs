@@ -9,5 +9,11 @@ export default defineConfig({
     // Live-DB e2e suite runs via `pnpm test:e2e` (vitest.e2e.config.ts) — it
     // needs the node environment and a real Postgres, so keep it out of `pnpm test`.
     exclude: ["**/node_modules/**", "**/*.e2e.test.ts"],
+    // `pnpm bench` — core logger throughput only. The live-DB adapter bench
+    // (*.e2e.bench.ts) needs a real Postgres and runs via `pnpm bench:e2e`.
+    benchmark: {
+      include: ["src/**/*.bench.ts"],
+      exclude: ["**/node_modules/**", "**/*.e2e.bench.ts"],
+    },
   },
 });
