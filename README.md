@@ -1,11 +1,12 @@
 # @campfhir/bored-logs
 
-Structured PostgreSQL-backed logging for Next.js — custom adapter-based logger, typed message templates, React UI components, and Kysely migration.
+Structured PostgreSQL-backed logging for React + Node — custom adapter-based logger, typed message templates, React UI components, and Kysely migration. The examples below use Next.js idioms, but the package is framework-agnostic; see [Using with Vite / React](#using-with-vite--react-non-nextjs) for a plain Vite SPA + Node backend.
 
 ## Contents
 
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
+- [Using with Vite / React (non-Next.js)](#using-with-vite--react-non-nextjs)
 - [Database setup](#database-setup)
 - [Setup](#setup)
 - [Using the logger](#using-the-logger)
@@ -53,7 +54,7 @@ npm install kysely pg react
 npm install @campfhir/bored-logs
 ```
 
-Add the package to `serverExternalPackages` in your `next.config.ts` so Next.js does not attempt to bundle it through webpack:
+**Next.js only:** add the package to `serverExternalPackages` in your `next.config.ts` so Next.js does not attempt to bundle it through webpack:
 
 ```typescript
 // next.config.ts
@@ -65,6 +66,102 @@ const nextConfig: NextConfig = {
 
 export default nextConfig;
 ```
+
+On Vite there is no equivalent to configure — see [Using with Vite / React](#using-with-vite--react-non-nextjs).
+
+---
+
+## Using with Vite / React (non-Next.js)
+
+The rest of this README uses Next.js idioms (`instrumentation.ts`, Route Handlers, Server Actions, `serverExternalPackages`). None of them are required — the package is framework-agnostic. This section maps each concept to a plain **Vite React SPA + your own Node/Bun backend** (Express, Fastify, Hono, etc.). Everything else in the README still applies; only the wiring changes.
+
+**The one rule that makes this work:** the browser bundle must never import `@campfhir/bored-logs/server`, `@campfhir/bored-logs/adapters/psql`, `pg`, or `kysely`. Those run on your backend only. In the browser you use just two entrypoints:
+
+| Entrypoint                          | Where it runs | What it gives you                                          |
+| ----------------------------------- | ------------- | ---------------------------------------------------------- |
+| `@campfhir/bored-logs/client`       | browser       | `LoggerProvider`, `useLogger` (ships logs over HTTP)       |
+| `@campfhir/bored-logs/components`   | browser       | `LogTable`, `LogSearchBar`, `PurgeLogsDialog`, etc.        |
+
+Because you only reference the server entrypoints from backend files, Vite naturally keeps them out of the client bundle — no `serverExternalPackages` analog is needed. (If you run Vite in **SSR** mode, add `ssr: { external: ["@campfhir/bored-logs", "pg", "kysely"] }` to `vite.config.ts` so the server build resolves them from `node_modules` at runtime instead of bundling them.)
+
+### Mapping Next.js concepts to your Vite stack
+
+| Next.js (as written in this README)                | Vite / React equivalent                                                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `next.config` → `serverExternalPackages`           | Nothing to do for an SPA. For Vite SSR, use `ssr.external` (above).                                                       |
+| `instrumentation.ts` → `register()`                | Register the `PostgresAdapter` **once at your backend's startup** (server entry file). No `NEXT_RUNTIME` guard needed — your backend is always Node. |
+| Route Handler `app/api/logs/route.ts`              | Mount `createLogIngestHandler` on **your backend router** (see below).                                                    |
+| Server Actions (`"use server"` `queryLogs`/`purgeLogs`) | Plain **REST endpoints** on your backend that call `adapter.query()` / `adapter.purge()`; the SPA calls them with `fetch`. |
+| `@/lib/db`, `@/lib/logger`                          | The same files, imported by your backend. `createLogger` is safe to import anywhere; `db` + `PostgresAdapter` are backend-only. |
+
+### 1. Backend: create the logger, DB, and run migrations
+
+Follow [Database setup](#database-setup) and [Setup](#setup) as written — the code is identical. The only change: instead of `instrumentation.ts`, add the `PostgresAdapter` in your server's bootstrap, once, before it starts listening. No dynamic import or runtime guard is required:
+
+```typescript
+// server/logger.ts  (backend only)
+import { PostgresAdapter } from "@campfhir/bored-logs/adapters/psql";
+import { logger } from "./lib/logger"; // createLogger({ ... }) as in Setup
+import { db } from "./lib/db";
+
+await new PostgresAdapter({ db }).migrate();       // idempotent — safe every startup
+logger.addAdapter(new PostgresAdapter({ db, level: "info" }));
+```
+
+### 2. Backend: the ingest endpoint
+
+`createLogIngestHandler` returns a standard `(request: Request) => Promise<Response>` (Web Fetch API), so it drops straight into any Web-standard router. With **Hono**:
+
+```typescript
+import { Hono } from "hono";
+import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { logger } from "./logger";
+
+const ingest = createLogIngestHandler({ logger /* , transform, maxBatch */ });
+
+const app = new Hono();
+app.post("/api/logs", (c) => ingest(c.req.raw)); // pass the raw Request, return its Response
+```
+
+For **Express** (which uses Node req/res, not Fetch), convert with a small adapter such as [`@remix-run/node`'s `createRequestHandler`](https://www.npmjs.com/package/@mjackson/node-fetch-server) helpers, or read the body yourself and call the handler with a synthesized `Request`. All handler options ([`createLogIngestHandler` options](#createlogingesthandler-options)) work unchanged — including `transform`, which receives the `Request` for pulling headers/IP or authorizing.
+
+### 3. Backend: query / purge endpoints
+
+Server Actions become ordinary authenticated routes that call the same adapter methods described in [Server actions](#server-actions):
+
+```typescript
+app.post("/api/logs/query", async (c) => {
+  // authenticate + authorize the request here
+  const options = await c.req.json();
+  const result = await logger.queryAdapter().query(options ?? {});
+  return result.ok ? c.json(result.val) : c.json({ error: result.err.message }, 500);
+});
+
+app.post("/api/logs/purge", async (c) => {
+  const { until, limit } = await c.req.json();
+  const result = await logger.queryAdapter().purge(new Date(until), limit);
+  return result.ok ? c.json({ deleted: result.val }) : c.json({ error: result.err }, 500);
+});
+```
+
+### 4. Client: provider, hook, and UI components
+
+Everything from [Client-side logging](#client-side-logging-uselogger) and [UI components](#ui-components) works **unchanged** — these are plain React. The only difference from the Next.js examples is that the `"use client"` directive is unnecessary (it's a no-op in Vite; leave it off or ignore it). Wrap your app once:
+
+```tsx
+// src/main.tsx
+import { LoggerProvider } from "@campfhir/bored-logs/client";
+
+createRoot(document.getElementById("root")!).render(
+  <LoggerProvider endpoint="/api/logs" application="web" level="info" credentials="include">
+    <App />
+  </LoggerProvider>,
+);
+```
+
+Then `useLogger()` in components, and build your log-viewer UI with the [components](#ui-components) — pointing the `onSearch` / purge handlers at the REST endpoints from step 3 (via `fetch`) instead of Server Actions. During local dev, proxy `/api` to your backend with Vite's `server.proxy` so the endpoint URLs stay relative.
+
+> **Console output.** The [Next.js and console output](#nextjs-and-console-output) caveats about `NEXT_RUNTIME` and `compiler.removeConsole` don't apply. Vite/esbuild can strip `console.*` in production via `esbuild: { drop: ["console"] }` — if you set that, `ConsoleAdapter` output disappears (the `HttpAdapter`/`PostgresAdapter` still ship and persist). `secure()`/`redact()` masking still auto-detects browser vs. server by `typeof window`.
 
 ---
 
