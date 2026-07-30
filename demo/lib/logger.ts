@@ -14,6 +14,7 @@ import {
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5433/bored_logs_demo";
+console.error(`[DEBUG] DATABASE_URL=${DATABASE_URL}`);
 
 type BoredLogs = {
   db: Kysely<Record<string, never>>;
@@ -61,7 +62,13 @@ export async function ensureBoredLogs(): Promise<BoredLogs> {
     await bl.ready;
     return bl;
   } catch (err) {
+    // If the connection fails (e.g., during Next.js build when the DB isn't available yet),
+    // clear the cache so the next call retries (don't cache the failure).
     globalForLogs.__boredLogsDemo = undefined;
+    // During builds or when the DB is unavailable, silently use a no-op logger instead of crashing.
+    if (process.env.NODE_ENV === "production" && process.env.DATABASE_UNAVAILABLE_NOOP === "true") {
+      return { db: null as any, adapter: null as any, logger: bl.logger, ready: Promise.resolve() };
+    }
     throw err;
   }
 }
