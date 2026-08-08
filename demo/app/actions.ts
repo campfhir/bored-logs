@@ -26,7 +26,7 @@ export async function simulate(scenarioId: string): Promise<{ count: number }> {
  * `levels` comes from the dedicated <LogLevelFilter> — level is a first-class
  * column with its own query option, not a stored attribute. The `expr` boolean
  * tree from <LogSearchBar> drives message/attribute matching via
- * `attributeFilter`; as a convenience any `level:` term typed into the bar is
+ * `attributeFilter`; as a convenience any `$level:` term typed into the bar is
  * also lifted out and merged into `levels`.
  */
 export async function search(

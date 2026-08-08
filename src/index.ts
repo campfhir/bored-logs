@@ -32,7 +32,12 @@ export type {
 
 // Logger instance / factory
 export { createLogger } from "./logger/logger";
-export type { Logger, LoggerOptions, ProcessEvent } from "./logger/logger";
+export type {
+  Logger,
+  LoggerOptions,
+  LoggerOptionsWithAttributes,
+  ProcessEvent,
+} from "./logger/logger";
 
 // Adapters
 export { ConsoleAdapter } from "./logger/console-adapter";
@@ -46,8 +51,20 @@ export {
   isRedacted,
   REDACTED_PLACEHOLDER,
   defaultSerializer,
+  resolveAttributes,
+  resolveTimestampFormat,
+  BUILTIN_TEMPLATE_KEYS,
 } from "./logger/template";
-export type { Secure, Redacted, ValueSerializer } from "./logger/template";
+export type {
+  Secure,
+  Redacted,
+  ValueSerializer,
+  LogAttributes,
+  AttributeValue,
+  BuiltinTemplateKey,
+  TimestampFormat,
+  TimestampPreset,
+} from "./logger/template";
 
 // Shared utility types
 export type { Result, AsyncResult, Prettify } from "./types";

@@ -29,8 +29,9 @@ function f(
   const filter = negated ? { key, operator, value, negated } : { key, operator, value };
   return { type: "filter", filter };
 }
+/** A bare free-text term — it targets the built-in `$message` column. */
 const msg = (value: string, negated?: boolean): FilterExpr =>
-  f("message", "contains", value, negated);
+  f("$message", "contains", value, negated);
 const and = (...nodes: FilterExpr[]): FilterExpr => ({ type: "and", nodes });
 const or = (...nodes: FilterExpr[]): FilterExpr => ({ type: "or", nodes });
 /** Convenience for a pure-AND query: and[ or[t1], or[t2], ... ]. */
@@ -287,12 +288,12 @@ describe("parseLogQueryExpr — operator syntax errors", () => {
 
 describe("parseLogQueryExpr — built-in timestamp validation", () => {
   const bad = [
-    "timestamp:'not-a-date'",
-    "timestamp:>'nope'",
-    "timestamp:<='2003-13-40'", // impossible calendar date
-    "timestamp:''", // empty value
-    "level:'error' timestamp:>'garbage'", // nested in an AND
-    "(timestamp:>'oops') || a:'1'", // nested in a group/OR
+    "$timestamp:'not-a-date'",
+    "$timestamp:>'nope'",
+    "$timestamp:<='2003-13-40'", // impossible calendar date
+    "$timestamp:''", // empty value
+    "$level:'error' $timestamp:>'garbage'", // nested in an AND
+    "($timestamp:>'oops') || a:'1'", // nested in a group/OR
   ];
   for (const query of bad) {
     it(`rejects ${JSON.stringify(query)} as a syntax error`, () => {
@@ -306,10 +307,12 @@ describe("parseLogQueryExpr — built-in timestamp validation", () => {
   }
 
   const good = [
-    "timestamp:'2003-01-02'",
-    "timestamp:>'2003-01-02'",
-    "timestamp:<='2024-06-01T12:00:00Z'",
-    "timestamp:>='2024-06-01T12:00:00.500+02:00'",
+    "$timestamp:'2003-01-02'",
+    "$timestamp:>'2003-01-02'",
+    "$timestamp:<='2024-06-01T12:00:00Z'",
+    "$timestamp:>='2024-06-01T12:00:00.500+02:00'",
+    // A *bare* `timestamp:` is an attribute, so no date validation applies.
+    "timestamp:'not-a-date'",
   ];
   for (const query of good) {
     it(`accepts ${JSON.stringify(query)}`, () => {

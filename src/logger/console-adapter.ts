@@ -96,6 +96,14 @@ export class ConsoleAdapter implements LogAdapter {
 
     if (recordNum > levelNum) return;
 
+    // A record formatted by the logger's output template is printed verbatim:
+    // the template author already chose the layout, so this adapter's own
+    // timestamp/level prefix and attribute pairs would only duplicate it.
+    if (record.formatted !== undefined) {
+      this._emit(record.level, record.formatted);
+      return;
+    }
+
     const mask = this._maskSecure;
 
     // Build a display string for attrs. On the server (mask=true) secure values
@@ -141,9 +149,12 @@ export class ConsoleAdapter implements LogAdapter {
       this.showLevel ? record.level.toUpperCase().padEnd(8) : "",
     ].filter(Boolean).join(" ");
 
-    const line = prefix ? `${prefix} ${body}` : body;
+    this._emit(record.level, prefix ? `${prefix} ${body}` : body);
+  }
 
-    const num = this._levels[record.level.toLowerCase()] ?? this._levels.info;
+  /** Route a finished line to `console.error`/`warn`/`log` by severity. */
+  private _emit(level: string, line: string): void {
+    const num = this._levels[level.toLowerCase()] ?? this._levels.info;
     if (num <= this._levels.error) {
       console.error(line);
     } else if (num <= this._levels.warn) {

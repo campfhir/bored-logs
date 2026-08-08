@@ -10,6 +10,9 @@ Structured PostgreSQL-backed logging for React + Node — custom adapter-based l
 - [Database setup](#database-setup)
 - [Setup](#setup)
 - [Using the logger](#using-the-logger)
+- [Global attributes](#global-attributes)
+  - [Reserved attribute names](#reserved-attribute-names)
+  - [Output templates](#output-templates)
 - [Secure values](#secure-values)
 - [Server actions](#server-actions)
 - [Client-side logging (`useLogger`)](#client-side-logging-uselogger)
@@ -298,6 +301,9 @@ export async function register() {
 | `bufferLimit`    | `number`                     | `500`                                  | Max records buffered before first adapter is registered                             |
 | `levels`         | `Record<string, number>`     | —                                      | Extra custom levels merged into the built-ins (see [Custom levels](#custom-levels)) |
 | `serializeValue` | `(value: unknown) => string` | JSON for objects, `String()` otherwise | How non-string attribute values are rendered into message templates                 |
+| `attributes`     | `Record<string, unknown>`    | —                                      | Attributes attached to every record (see [Global attributes](#global-attributes))   |
+
+Any **other** key you pass becomes a global attribute, so `createLogger({ commit: "e02350" })` stamps `commit` on every record. Use the explicit `attributes` bag when an attribute name collides with one of the option names above.
 
 ### `PostgresAdapter` options
 
@@ -347,6 +353,12 @@ logger.info("Order {orderId} placed", {
 logger.log("request", "Incoming request", { method: "GET", path: "/api/data" });
 logger.log("sql", "Query executed", { duration: 42 });
 logger.log("critical", "Database unreachable");
+
+// Every log method returns the logger, so calls chain
+logger
+  .info("Job {jobId} started", { jobId: "j_1" })
+  .debug("Config loaded", { entries: 42 })
+  .info("Job {jobId} finished", { jobId: "j_1" });
 ```
 
 Named methods exist for every built-in level: `critical`, `error`, `warn`, `info`, `http`, `verbose`, `cache`, `request`, `response`, `sql`, `debug`. Use `log(level, …)` for any **registered** level. `level` is typed to the registered levels, so an unregistered name is a compile error — register custom levels via `createLogger({ levels })` / `addLevels()` (see [Custom levels](#custom-levels)). To emit a dynamically computed level string, cast it to a known level (`logger.log(dynamic as LogLevel, …)`).
@@ -410,6 +422,118 @@ declare module "@campfhir/bored-logs" {
 ```
 
 Once augmented, `queryLogs({ minLevel: "audit" })` type-checks, while a typo like `"aduit"` is a compile error. The augmentation is type-only — you still register the runtime rank (`levels` / `addLevels`) as above.
+
+---
+
+## Global attributes
+
+Attributes you want on **every** record — a build commit, a region, a request id — are declared once on `createLogger` instead of repeated at each call site. Any option key that isn't a known `createLogger` option becomes a global attribute:
+
+```typescript
+const logger = createLogger({
+  application: "checkout",
+  version: "0.0.1",
+  commit: "e02350",
+  region: process.env.AWS_REGION,
+});
+
+logger.info("Order placed", { orderId: "o_1" });
+// record.attrs → { commit: "e02350", region: "us-west-2", orderId: "o_1" }
+```
+
+Globals land in `record.attrs`, so every adapter sees them and the Postgres adapter makes them searchable (`commit:e02350` in [log search](#log-search)) — exactly like an attribute you passed by hand.
+
+### Reserved attribute names
+
+Only the five `$`-prefixed built-in names — `$message`, `$level`, `$timestamp`, `$application`, `$version` — are reserved, so a built-in can never be displaced. They are a compile error as attribute names, and stripped at runtime for untyped callers. **Every ordinary name is yours**, including `message`, `level`, and `timestamp`:
+
+```typescript
+logger.info("Done", { timestamp: Date.now(), level: "urgent" }); // ✓
+logger.info("Done", { $timestamp: Date.now() }); // ✗ compile error
+```
+
+The `$` sigil is the same convention MongoDB uses for reserved operators inside a user-controlled document, and it is deliberately *not* `_`, which in TypeScript already means "private/internal" — this package uses `_name` for its own private class fields.
+
+`application` and `version` are ordinary attributes too — the Postgres adapter fills them in from the logger's `application` / `version` options when the record doesn't carry its own. Passing either at a call site overrides that record's value, the same way any call-site attribute overrides a global:
+
+```typescript
+const logger = createLogger({ application: "api" });
+logger.info("Task ran", { application: "worker" }); // stored application = "worker"
+```
+
+The same sigil applies in [log search](#log-search), so those names stay unambiguous there too: `$timestamp:` searches the `logs` column and `timestamp:` searches your attribute.
+
+**Function values are resolved at each log call**, so an attribute can be computed fresh per record:
+
+```typescript
+const logger = createLogger({
+  timestamp: () => new Date().toISOString(),
+  requestId: () => getRequestContext()?.id,
+});
+```
+
+A resolver runs **once per `log()` call**, not once per adapter, so every sink sees the same value. If a resolver throws, its attribute is simply omitted — logging never breaks the call site.
+
+Globals also satisfy `{key}` placeholders in a message template, and TypeScript knows it — you don't have to pass them:
+
+```typescript
+logger.info("Built from {commit}"); // no attrs argument needed
+logger.info("Built from {commit} by {user}", { user: "ada" }); // only `user` is required
+```
+
+Call-site attributes win over a global of the same name. Read or replace the map at runtime via `logger.attributes`:
+
+```typescript
+logger.attributes = { ...logger.attributes, deploymentId: "d_9" };
+```
+
+### Output templates
+
+`logger.template()` sets the layout of the rendered log line, so every record comes out with the same shape. It returns the logger, so it chains off `createLogger`:
+
+```typescript
+const logger = createLogger({
+  version: "0.0.1",
+  commit: "e02350",
+}).template("{$timestamp} {$message} {$version} {commit}");
+
+logger.info("something something {userId}", { userId: "123" });
+// 2026-08-03T10:22:59.000Z something something 123 0.0.1 e02350
+```
+
+The message is interpolated first, then dropped into `{$message}`. The result is written to `record.formatted`; `record.message` and `record.template` are untouched, so search and querying still work on the message alone.
+
+Placeholders come from **two disjoint namespaces**, so it is always obvious which is which:
+
+| Placeholder                                                              | Resolves from                                                          |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `{$message}` `{$level}` `{$timestamp}` `{$application}` `{$version}`     | The record itself. Always wins — no attribute can displace a built-in  |
+| anything else, e.g. `{commit}`                                           | The attributes: globals first, then the call site, which wins          |
+
+The `$` sigil makes a built-in unmistakable at a glance, and it keeps every ordinary name available to you. The two namespaces never collide, so `{$message}` and `{message}` are genuinely different things — the record's message, versus an attribute that happens to be called `message`. Same for `{$application}` (the logger's `application` option) and `{application}` (whatever attribute that record carries). The identical sigil selects built-in columns in [log search](#built-in-fields).
+
+Anything unresolved is left literal (`{nope}` stays `{nope}`), and `secure()` / `redact()` values are always masked — a formatted line is safe to print anywhere. `ConsoleAdapter` prints `formatted` verbatim when it is present, without adding its own timestamp/level prefix or attribute pairs, since the template already decides the layout. Pass `null` to clear the template and restore the default formatting.
+
+#### Timestamp rendering
+
+`{$timestamp}` defaults to ISO-8601 UTC. `renderTimestamp()` changes how it renders — **storage is unaffected**; the database always records the full timestamp with offset:
+
+```typescript
+// Presets: "iso" (default) | "epoch" | "time" | "date" | "datetime"
+logger.template("{$timestamp} {$message}").renderTimestamp("time");
+// 11:22:59 AM  something something 123
+
+// Locale-aware, via Intl.DateTimeFormat options (+ optional locale)
+logger.renderTimestamp({ locale: "de-DE", dateStyle: "short", timeStyle: "medium" });
+// 03.08.26, 11:22:59  something something 123
+
+// Or any custom format via a callback
+logger.renderTimestamp((d) => d.toLocaleString());
+```
+
+The `time` / `date` / `datetime` presets use the host's locale via `Intl.DateTimeFormat`; pass the options-object form to pin a locale or time zone explicitly. A callback that throws falls back to ISO rather than breaking the log call, and `renderTimestamp(null)` resets to ISO. The renderer only touches the `{$timestamp}` built-in — an attribute of yours named `timestamp` is rendered like any other attribute.
+
+> Records fed in through `logger.ingest()` (browser logs shipped to an ingest handler) arrive already complete and are **not** re-rendered or given the server's global attributes.
 
 ---
 
@@ -696,7 +820,7 @@ Two Next.js config settings to be aware of:
 
 Turn an Elasticsearch-style query string into a filter tree:
 
-- **`parseLogQueryExpr`** (recommended) — parses the full boolean grammar (`||`, `&&`/whitespace, `()`) into a `FilterExpr` tree you pass straight to `query({ attributeFilter })`. Returns a `Result` so malformed input (including an unparseable `timestamp:` date) is a value, not a throw.
+- **`parseLogQueryExpr`** (recommended) — parses the full boolean grammar (`||`, `&&`/whitespace, `()`) into a `FilterExpr` tree you pass straight to `query({ attributeFilter })`. Returns a `Result` so malformed input (including an unparseable `$timestamp:` date) is a value, not a throw.
 - **`parseLogQuery`** — a flat, AND-only tokenizer that returns `LogQueryToken[]` (no OR/grouping, no validation). Useful for building your own tree or chip UI.
 
 ### Syntax
@@ -721,22 +845,22 @@ So `a b \|\| c` reads as `a AND (b OR c)`; write `(a b) \|\| c` for `(a AND b) O
 
 #### Built-in fields
 
-Three keys map to real columns on the `logs` table instead of stored attributes — matching the built-in fields surfaced by [`LogSearchBar`](#logsearchbar) autocomplete:
+Three `$`-prefixed keys map to real columns on the `logs` table instead of stored attributes — the same sigil the logger uses for [output-template built-ins](#output-templates), and the same five names it reserves. **A key without `$` is always an attribute lookup**, so an attribute named `level` is searchable as `level:` and never collides with the column:
 
 | Key                       | Column               | Behaviour                                                                                                   |
 | ------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `message` / `msg`         | `logs.message`       | `LIKE` contains                                                                                             |
-| `timestamp`               | `logs.logged_timestamp` | Compared as a proper timestamp. Accepts ISO/RFC date or date-time strings — e.g. `timestamp:>'2003-01-02'`, `timestamp:<='2024-06-01T12:00:00Z'`. A bare date with `:` / `:=` (`timestamp:'2003-01-02'`) matches the whole calendar day. Unparseable values match nothing. |
-| `level`                   | `logs.level`         | Case-insensitive exact match (`level:'error'` ≡ `level:='error'`); `level:` contains for partial names. Not an ordered scale, so `>`/`<` are treated as exact match — use the `minLevel` query option for severity thresholds. |
+| `$message` / `$msg`       | `logs.message`       | `LIKE` contains. Bare free text (`payment failed`) is shorthand for this                                    |
+| `$timestamp`              | `logs.logged_timestamp` | Compared as a proper timestamp. Accepts ISO/RFC date or date-time strings — e.g. `$timestamp:>'2003-01-02'`, `$timestamp:<='2024-06-01T12:00:00Z'`. A bare date with `:` / `:=` (`$timestamp:'2003-01-02'`) matches the whole calendar day. Unparseable values are a parse error. |
+| `$level`                  | `logs.level`         | Case-insensitive exact match (`$level:'error'` ≡ `$level:='error'`); `$level:` contains for partial names. Not an ordered scale, so `>`/`<` are treated as exact match — use the `minLevel` query option for severity thresholds. |
 
-Any other key is an attribute lookup against `log_attr`.
+Any other key — `$`-less, or `$application` / `$version`, which are stored as ordinary attributes — is an attribute lookup against `log_attr`.
 
-> **`timestamp:` is intersected with the query's date window.** `query()` always constrains results to `[start, end]` (default: the last 24 hours). A `timestamp:` term narrows *within* that window — it doesn't widen it. To search historical logs, widen the window via the `start` / `end` options (or the [`LogDateRangePicker`](#logdaterangepicker)).
+> **`$timestamp:` is intersected with the query's date window.** `query()` always constrains results to `[start, end]` (default: the last 24 hours). A `$timestamp:` term narrows *within* that window — it doesn't widen it. To search historical logs, widen the window via the `start` / `end` options (or the [`LogDateRangePicker`](#logdaterangepicker)).
 
 ```typescript
 import { parseLogQueryExpr, formatExpr, isUnsatisfiable } from "@campfhir/bored-logs";
 
-const res = parseLogQueryExpr("level:'error' (service:'db' || service:'payments')");
+const res = parseLogQueryExpr("$level:'error' (service:'db' || service:'payments')");
 if (res.ok) {
   const expr = res.val; // FilterExpr | null (null for empty input)
   const result = await queryLogs({ attributeFilter: expr ?? undefined });
@@ -760,7 +884,7 @@ isUnsatisfiable(expr);      // true → the whole query can never match, reject 
 
 `findContradictions` reasons over the DNF, so `||` operands are treated as alternatives — a contradiction in one branch doesn't flag the other.
 
-> **Filtering by level:** a `level:` term now matches the real `logs.level` column (see [Built-in fields](#built-in-fields)), but it's an exact-match — for **severity thresholds** ("warn and above") use the dedicated `level` / `levels` / `minLevel` query options (see [`LogLevelFilter`](#loglevelfilter)), which expand to a level set.
+> **Filtering by level:** a `$level:` term matches the real `logs.level` column (see [Built-in fields](#built-in-fields)), but it's an exact-match — for **severity thresholds** ("warn and above") use the dedicated `level` / `levels` / `minLevel` query options (see [`LogLevelFilter`](#loglevelfilter)), which expand to a level set.
 
 The flat `parseLogQuery` tokenizer remains for simple AND-only cases — fold its tokens into an `and` tree to pass as `attributeFilter`:
 
@@ -966,7 +1090,7 @@ import { queryLogs } from "@/actions/logs";
     const res = await queryLogs({ attributeFilter: expr ?? undefined });
     if (res.ok) setLogs(res.val);
   }}
-  placeholder="level:'error' (service:'db' || service:'payments')"
+  placeholder="$level:'error' (service:'db' || service:'payments')"
 />;
 ```
 
@@ -993,7 +1117,7 @@ import { queryLogs } from "@/actions/logs";
 - Escape on value stage: suppresses suggestions for that value; resets when the token is committed.
 - Operator stage suggestions are never suppressed by Escape.
 
-> **Note — built-in fields.** `timestamp`, `level`, and `message` map to real `logs` columns rather than stored attributes (see [Built-in fields](#built-in-fields)); the autocomplete tags them so it's clear you're selecting the built-in and not a same-named attribute. `level:` in the search bar now matches the level column, but it's an **exact** match — for severity thresholds ("warn and above") prefer [`LogLevelFilter`](#loglevelfilter) with `query({ levels })`, which expands to a level set. The demo lifts `level:` terms out of the tree into the dedicated level filter for exactly this reason.
+> **Note — built-in fields.** `$timestamp`, `$level`, and `$message` map to real `logs` columns rather than stored attributes (see [Built-in fields](#built-in-fields)); the autocomplete tags them `builtin` and lists them first. Because of the `$` sigil, a same-named attribute is offered as its own separate entry. `$level:` in the search bar matches the level column, but it's an **exact** match — for severity thresholds ("warn and above") prefer [`LogLevelFilter`](#loglevelfilter) with `query({ levels })`, which expands to a level set. The demo lifts `level:` terms out of the tree into the dedicated level filter for exactly this reason.
 
 ### `LogLevelFilter`
 

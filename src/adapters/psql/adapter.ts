@@ -232,16 +232,18 @@ type LogItem = {
 // ---------------------------------------------------------------------------
 
 // Built-in query keys map to real columns on the `logs` table rather than to
-// stored attributes in `log_attr`. `message`/`msg` → logs.message,
-// `timestamp` → logs.logged_timestamp, `level` → logs.level.
+// stored attributes in `log_attr`. They carry the `$` sigil so an *unprefixed*
+// key always means an attribute — `$message`/`$msg` → logs.message,
+// `$timestamp` → logs.logged_timestamp, `$level` → logs.level, while a bare
+// `message:` / `timestamp:` / `level:` searches an attribute of that name.
 function isMessageKey(key: string): boolean {
-  return key === "message" || key === "msg";
+  return key === "$message" || key === "$msg";
 }
 function isTimestampKey(key: string): boolean {
-  return key === "timestamp";
+  return key === "$timestamp";
 }
 function isLevelKey(key: string): boolean {
-  return key === "level";
+  return key === "$level";
 }
 
 // Matches an ISO-8601 / RFC-3339 date or date-time string (JS-side gate).
@@ -1035,11 +1037,15 @@ export class PostgresAdapter implements QueryableLogAdapter {
       result.push([key, entry]);
     }
 
-    // Append standard meta attributes.
-    if (record.application) {
+    // Append standard meta attributes. `application` / `version` are not
+    // columns, so they ride along as attributes — but they are also legal
+    // attribute names. An explicit attribute wins (the same "call site
+    // overrides the global" rule the logger applies), and skipping it here is
+    // what keeps the key from being written twice.
+    if (record.application && !("application" in record.attrs)) {
       result.push(["application", { val: record.application, type: "string" }]);
     }
-    if (record.version) {
+    if (record.version && !("version" in record.attrs)) {
       result.push(["version", { val: record.version, type: "string" }]);
     }
 

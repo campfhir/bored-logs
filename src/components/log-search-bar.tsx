@@ -23,11 +23,11 @@ type SuggestionKind = "builtin" | "attribute";
 type Suggestion = { display: string; insert: string; kind?: SuggestionKind };
 
 /**
- * Built-in query fields — not attributes. They are always suggested, listed
- * first, and tagged `builtin` so it is obvious the user is selecting the
- * built-in field of that name rather than a same-named attribute.
+ * Built-in query fields — not attributes. The `$` sigil is what separates them
+ * from a same-named attribute; they are always suggested, listed first, and
+ * tagged `builtin`.
  */
-const BUILTIN_KEYS = ["timestamp", "level", "message"];
+const BUILTIN_KEYS = ["$timestamp", "$level", "$message"];
 
 function quoteKey(key: string): string {
   return /[\s:'"=<>!]/.test(key) ? `'${key.replace(/'/g, "\\'")}'` : key;
@@ -93,9 +93,9 @@ function computeSuggestions(ctx: AutocompleteCtx, logs: LogRow[]): Suggestion[] 
       .sort()
       .map((k): Suggestion => ({ display: k, insert: quoteKey(k) + ":", kind: "builtin" }));
 
-    // Attribute keys, excluding any that collide with a built-in name — the
-    // built-in above already represents that name and the emitted token is
-    // identical, so a second entry would only be confusing.
+    // Attribute keys. A `$`-prefixed name can only be a built-in (the logger
+    // rejects those as attribute names), so this filter is a safety net; an
+    // attribute named `level` is a distinct entry from the `$level` column.
     const attrKeys = new Set<string>();
     for (const log of logs) {
       for (const k of Object.keys(log.meta)) {
@@ -186,6 +186,7 @@ export function LogSearchSyntaxHelp({ className }: { className?: string }): Reac
         <dt>key:&lt;'value'</dt>  <dd>less than</dd>
         <dt>key:&lt;='value'</dt> <dd>lte</dd>
         <dt>bare text</dt>      <dd>message contains</dd>
+        <dt>$message $level $timestamp</dt> <dd>built-in columns (a bare key is an attribute)</dd>
         <dt>a b / a &amp;&amp; b</dt> <dd>and</dd>
         <dt>a || b</dt>         <dd>or (binds tighter than and)</dd>
         <dt>(a b) || c</dt>     <dd>grouping</dd>

@@ -117,8 +117,8 @@ describe("LogSearchBar autocomplete", () => {
 
     it("includes always-suggested keys", () => {
       render(<LogSearchBar logs={logs} />);
-      type(getInput(), "lev");
-      expect(screen.getByRole("option", { name: "level" })).toBeInTheDocument();
+      type(getInput(), "lev"); // substring match, so the `$` need not be typed
+      expect(screen.getByRole("option", { name: "$level" })).toBeInTheDocument();
     });
 
     it("filters suggestions by typed prefix", () => {
@@ -131,7 +131,7 @@ describe("LogSearchBar autocomplete", () => {
     it("tags built-in fields as builtin, distinct from attributes", () => {
       render(<LogSearchBar logs={logs} />);
       type(getInput(), "e"); // matches built-ins (level/message/timestamp) and attrs
-      expect(screen.getByRole("option", { name: "level" })).toHaveAttribute("data-kind", "builtin");
+      expect(screen.getByRole("option", { name: "$level" })).toHaveAttribute("data-kind", "builtin");
       expect(screen.getByRole("option", { name: "env" })).toHaveAttribute("data-kind", "attribute");
     });
 
@@ -143,23 +143,30 @@ describe("LogSearchBar autocomplete", () => {
       expect(kinds.lastIndexOf("builtin")).toBeLessThan(kinds.indexOf("attribute"));
     });
 
-    it("does not duplicate a built-in when an attribute shares its name", () => {
+    it("offers the built-in and a same-named attribute as separate entries", () => {
       const collidingLogs: LogRow[] = [
         { id: "1", level: "info", message: "m", meta: { level: "shadow", env: "prod" }, timestamp: null },
       ];
       render(<LogSearchBar logs={collidingLogs} />);
       type(getInput(), "level");
-      const opts = screen.getAllByRole("option", { name: "level" });
-      expect(opts).toHaveLength(1);
-      expect(opts[0]).toHaveAttribute("data-kind", "builtin");
+      // The `$` sigil is what makes these distinguishable — before it, the
+      // attribute was suppressed because its token was indistinguishable.
+      expect(screen.getByRole("option", { name: "$level" })).toHaveAttribute(
+        "data-kind",
+        "builtin",
+      );
+      expect(screen.getByRole("option", { name: "level" })).toHaveAttribute(
+        "data-kind",
+        "attribute",
+      );
     });
 
     it("keeps the accessible name equal to the field name for built-ins", () => {
       render(<LogSearchBar logs={logs} />);
       type(getInput(), "lev");
       // The visible "built-in" tag is aria-hidden, so accepting still inserts level:.
-      fireEvent.mouseDown(screen.getByRole("option", { name: "level" }));
-      expect(getInput().value).toBe("level:");
+      fireEvent.mouseDown(screen.getByRole("option", { name: "$level" }));
+      expect(getInput().value).toBe("$level:");
     });
   });
 

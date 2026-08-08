@@ -184,9 +184,9 @@ describe("PostgresAdapter e2e — write + query round-trip", () => {
   });
 
   it("filters on the built-in level field (case-insensitive) via the query bar", async () => {
-    // `level:` is a real column, not a stored attribute — must match logs.level.
-    expect(await search("level:'error'")).toEqual(["db connection failed"]);
-    expect(await search("level:='info'")).toEqual(["cache miss", "user login"]);
+    // `$level:` is the real column, not a stored attribute — must match logs.level.
+    expect(await search("$level:'error'")).toEqual(["db connection failed"]);
+    expect(await search("$level:='info'")).toEqual(["cache miss", "user login"]);
   });
 });
 
@@ -202,35 +202,35 @@ describe("PostgresAdapter e2e — built-in timestamp field", () => {
     );
   });
 
-  it("`timestamp:>` filters chronologically on logs.logged_timestamp", async () => {
-    expect(await searchWindow("timestamp:>'2010-01-01'", WIDE_START, WIDE_END)).toEqual(["recent"]);
+  it("`$timestamp:>` filters chronologically on logs.logged_timestamp", async () => {
+    expect(await searchWindow("$timestamp:>'2010-01-01'", WIDE_START, WIDE_END)).toEqual(["recent"]);
   });
 
-  it("`timestamp:<` filters chronologically on logs.logged_timestamp", async () => {
-    expect(await searchWindow("timestamp:<'2010-01-01'", WIDE_START, WIDE_END)).toEqual([
+  it("`$timestamp:<` filters chronologically on logs.logged_timestamp", async () => {
+    expect(await searchWindow("$timestamp:<'2010-01-01'", WIDE_START, WIDE_END)).toEqual([
       "ancient",
       "midday",
     ]);
   });
 
-  it("a bare `timestamp:` date matches the whole calendar day", async () => {
-    expect(await searchWindow("timestamp:'2003-06-15'", WIDE_START, WIDE_END)).toEqual(["midday"]);
-    expect(await searchWindow("timestamp:'2003-06-16'", WIDE_START, WIDE_END)).toEqual([]);
+  it("a bare `$timestamp:` date matches the whole calendar day", async () => {
+    expect(await searchWindow("$timestamp:'2003-06-15'", WIDE_START, WIDE_END)).toEqual(["midday"]);
+    expect(await searchWindow("$timestamp:'2003-06-16'", WIDE_START, WIDE_END)).toEqual([]);
   });
 
   it("compares against a full ISO/RFC datetime, not just a date", async () => {
     // 2003-06-15T12:00Z is the 'midday' row; strictly-after excludes it.
-    expect(await searchWindow("timestamp:>'2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
+    expect(await searchWindow("$timestamp:>'2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
       "recent",
     ]);
-    expect(await searchWindow("timestamp:>='2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
+    expect(await searchWindow("$timestamp:>='2003-06-15T12:00:00Z'", WIDE_START, WIDE_END)).toEqual([
       "midday",
       "recent",
     ]);
   });
 
   it("rejects an unparseable timestamp value as a syntax error (never reaches the DB)", () => {
-    const parsed = parseLogQueryExpr("timestamp:>'not-a-date'");
+    const parsed = parseLogQueryExpr("$timestamp:>'not-a-date'");
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.err.cause?.message).toMatch(/timestamp value/);
   });

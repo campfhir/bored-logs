@@ -17,7 +17,7 @@
  *   message:!'value'       → message does NOT contain value
  *
  * Multiple tokens are ANDed together.
- * Tokens with no key default to key="message", operator="contains".
+ * Tokens with no key default to key="$message", operator="contains".
  *
  * Keys and values support single OR double quote wrapping.
  */
@@ -30,7 +30,7 @@ export type LogQueryOperator = "contains" | "=" | ">" | ">=" | "<" | "<=";
 
 /** A single parsed query term: a key/operator/value comparison, optionally negated. */
 export interface LogQueryToken {
-  key: string; // "message" when no key given
+  key: string; // "$message" when no key given
   operator: LogQueryOperator;
   value: string;
   /** When true, the filter is negated (NOT LIKE / NOT IN) */
@@ -193,7 +193,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
       keyWasQuoted = true;
     } else {
       // Not followed by ':', treat the quoted string as a bare message term
-      return { key: "message", operator: "contains", value: quotedKey ?? "" };
+      return { key: "$message", operator: "contains", value: quotedKey ?? "" };
     }
   } else {
     // Bare key — read up to ':' or a term boundary
@@ -209,7 +209,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
 
   if (!keyWasQuoted && (cur.i >= cur.input.length || cur.input[cur.i] !== ":")) {
     // No colon found — bare word, treat as message contains
-    return key ? { key: "message", operator: "contains", value: key } : null;
+    return key ? { key: "$message", operator: "contains", value: key } : null;
   }
 
   // Consume the ':'
@@ -245,7 +245,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
     value = readBareWord(cur);
     if (!value) {
       // colon with no value: treat key as bare message word
-      return { key: "message", operator: "contains", value: key };
+      return { key: "$message", operator: "contains", value: key };
     }
   }
 
@@ -254,7 +254,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
   }
   // fallback
   cur.i = start;
-  return { key: "message", operator: "contains", value: readBareWord(cur) };
+  return { key: "$message", operator: "contains", value: readBareWord(cur) };
 }
 
 type ParseResult<T> = Result<T, typeof QUERY_SYNTAX_ERROR>;
@@ -266,7 +266,7 @@ type ParseResult<T> = Result<T, typeof QUERY_SYNTAX_ERROR>;
  * that silently matches nothing.
  */
 function validateBuiltinLeaf(token: LogQueryToken): ParseError | null {
-  if (token.key === "timestamp" && isNaN(new Date(token.value).getTime())) {
+  if (token.key === "$timestamp" && isNaN(new Date(token.value).getTime())) {
     return syntaxError(
       `invalid timestamp value ${JSON.stringify(token.value)} — ` +
         `expected an ISO/RFC date or date-time (e.g. '2003-01-02' or '2003-01-02T09:30:00Z')`,
@@ -541,7 +541,7 @@ export function isUnsatisfiable(expr: FilterExpr | null): boolean {
  * Format tokens back into a display string (for UI chip rendering etc.)
  */
 export function formatToken(token: LogQueryToken): string {
-  const isMessage = token.key === "message";
+  const isMessage = token.key === "$message" || token.key === "$msg";
   if (isMessage && token.operator === "contains") {
     // bare message terms have no key prefix; negated ones show message:!'...'
     if (!token.negated) return `"${token.value}"`;

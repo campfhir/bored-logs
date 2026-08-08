@@ -10,7 +10,7 @@ describe("parseLogQuery", () => {
 
   it("treats bare word as message contains", () => {
     expect(parseLogQuery("error")).toEqual([
-      { key: "message", operator: "contains", value: "error" },
+      { key: "$message", operator: "contains", value: "error" },
     ]);
   });
 
@@ -83,7 +83,7 @@ describe("parseLogQuery", () => {
 
   it("parses bare word mixed with key tokens", () => {
     const result = parseLogQuery("failed level:'error'");
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "failed" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "failed" });
     expect(result[1]).toEqual({ key: "level", operator: "contains", value: "error" });
   });
 
@@ -97,34 +97,34 @@ describe("parseLogQuery", () => {
     const result = parseLogQuery("key:value bareword");
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ key: "key", operator: "contains", value: "value" });
-    expect(result[1]).toEqual({ key: "message", operator: "contains", value: "bareword" });
+    expect(result[1]).toEqual({ key: "$message", operator: "contains", value: "bareword" });
   });
 
   it("treats double-quoted phrase not followed by ':' as message contains", () => {
     const result = parseLogQuery('"bareword with space" key:value');
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "bareword with space" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "bareword with space" });
     expect(result[1]).toEqual({ key: "key", operator: "contains", value: "value" });
   });
 
   it("treats single-quoted word not followed by ':' as message contains", () => {
     const result = parseLogQuery("'bareword' key:value");
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "bareword" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "bareword" });
     expect(result[1]).toEqual({ key: "key", operator: "contains", value: "value" });
   });
 
   it("parses multiple bare words as separate message contains tokens", () => {
     const result = parseLogQuery("barword barword");
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "barword" });
-    expect(result[1]).toEqual({ key: "message", operator: "contains", value: "barword" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "barword" });
+    expect(result[1]).toEqual({ key: "$message", operator: "contains", value: "barword" });
   });
 
   it("parses bare word before a key:value pair", () => {
     const result = parseLogQuery("bareword key:value");
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "bareword" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "bareword" });
     expect(result[1]).toEqual({ key: "key", operator: "contains", value: "value" });
   });
 
@@ -132,8 +132,8 @@ describe("parseLogQuery", () => {
     // 'key:' with no attached value — key becomes a message term, 'value' becomes another
     const result = parseLogQuery("key: value");
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ key: "message", operator: "contains", value: "key" });
-    expect(result[1]).toEqual({ key: "message", operator: "contains", value: "value" });
+    expect(result[0]).toEqual({ key: "$message", operator: "contains", value: "key" });
+    expect(result[1]).toEqual({ key: "$message", operator: "contains", value: "value" });
   });
 
   it("parses quoted key with bare (unquoted) value", () => {
@@ -208,7 +208,7 @@ describe("parseLogQuery — special characters in keys and values", () => {
 
 describe("formatToken", () => {
   it("formats bare message contains without key prefix", () => {
-    const t: LogQueryToken = { key: "message", operator: "contains", value: "error" };
+    const t: LogQueryToken = { key: "$message", operator: "contains", value: "error" };
     expect(formatToken(t)).toBe('"error"');
   });
 

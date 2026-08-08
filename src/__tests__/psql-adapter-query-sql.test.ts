@@ -237,8 +237,8 @@ describe("PostgresAdapter.query — generated SQL for the attributeFilter tree",
     expect(strParams(q)).toContain("%42%");
   });
 
-  it("compiles a message leaf to a LIKE on logs.message (no EXISTS)", async () => {
-    const q = await mainQuery("message:'boom'");
+  it("compiles a $message leaf to a LIKE on logs.message (no EXISTS)", async () => {
+    const q = await mainQuery("$message:'boom'");
     expect(q.sql).toMatch(/"logs"\."message" like \$\d+/);
     expect(q.sql).not.toMatch(/exists \(/i);
     expect(strParams(q)).toContain("%boom%");
@@ -270,8 +270,8 @@ describe("PostgresAdapter.query — generated SQL for the attributeFilter tree",
     expect(strParams(q)).toContain("%42%");
   });
 
-  it("compiles a negated message leaf to NOT LIKE", async () => {
-    const q = await mainQuery("message:!'boom'");
+  it("compiles a negated $message leaf to NOT LIKE", async () => {
+    const q = await mainQuery("$message:!'boom'");
     expect(q.sql).toMatch(/"logs"\."message" not like \$\d+/);
   });
 
@@ -337,8 +337,8 @@ describe("PostgresAdapter.query — built-in timestamp/level fields (not attribu
   const dateParamCount = (q: CompiledQuery): number =>
     q.parameters.filter((p) => p instanceof Date).length;
 
-  it("compiles `timestamp:>` against logs.logged_timestamp, not an attribute EXISTS", async () => {
-    const q = await mainQuery("timestamp:>'2003-01-02T00:00:00Z'");
+  it("compiles `$timestamp:>` against logs.logged_timestamp, not an attribute EXISTS", async () => {
+    const q = await mainQuery("$timestamp:>'2003-01-02T00:00:00Z'");
     // `> $n` (strict) — distinct from the window's `>= $n`.
     expect(q.sql).toMatch(/"logs"\."logged_timestamp" > \$/);
     // Not routed to log_attr with val_name = 'timestamp'.
@@ -348,8 +348,8 @@ describe("PostgresAdapter.query — built-in timestamp/level fields (not attribu
     expect(dateParamCount(q)).toBe(3);
   });
 
-  it("treats a bare `timestamp:` date as the whole calendar day (range, not equality)", async () => {
-    const q = await mainQuery("timestamp:'2003-01-02'");
+  it("treats a bare `$timestamp:` date as the whole calendar day (range, not equality)", async () => {
+    const q = await mainQuery("$timestamp:'2003-01-02'");
     expect(q.sql).not.toMatch(/exists \(/i);
     // Two extra Date params beyond the window: day start and day+1.
     expect(dateParamCount(q)).toBe(4);
@@ -359,7 +359,7 @@ describe("PostgresAdapter.query — built-in timestamp/level fields (not attribu
     for (const op of [">", ">=", "<", "<="]) {
       const cap = makeCapturingDb();
       const a = new PostgresAdapter({ db: cap.db });
-      const parsed = parseLogQueryExpr(`timestamp:${op}'2003-01-02T00:00:00Z'`);
+      const parsed = parseLogQueryExpr(`$timestamp:${op}'2003-01-02T00:00:00Z'`);
       if (!parsed.ok) throw parsed.err;
       await a.query({
         attributeFilter: parsed.val ?? undefined,
@@ -374,15 +374,15 @@ describe("PostgresAdapter.query — built-in timestamp/level fields (not attribu
     }
   });
 
-  it("compiles `level:` against logs.level (uppercased), not an attribute EXISTS", async () => {
-    const q = await mainQuery("level:='error'");
+  it("compiles `$level:` against logs.level (uppercased), not an attribute EXISTS", async () => {
+    const q = await mainQuery("$level:='error'");
     expect(q.sql).toMatch(/"logs"\."level" = \$\d+/);
     expect(q.sql).not.toMatch(/exists \(/i);
     expect(strParams(q)).toContain("ERROR");
   });
 
-  it("compiles a negated `timestamp:` leaf (via !=) to a NOT comparison, no EXISTS", async () => {
-    const q = await mainQuery("timestamp:!='2003-01-02'");
+  it("compiles a negated `$timestamp:` leaf (via !=) to a NOT comparison, no EXISTS", async () => {
+    const q = await mainQuery("$timestamp:!='2003-01-02'");
     expect(q.sql).toMatch(/not /i);
     expect(q.sql).not.toMatch(/exists \(/i);
     expect(dateParamCount(q)).toBe(4); // window ×2 + day-range ×2, negated

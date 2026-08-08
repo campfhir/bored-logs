@@ -79,8 +79,15 @@ export type LogRecord = {
   template: string;
   /** True when the entire message template was wrapped with secure(). */
   secureMessage: boolean;
-  /** Raw attribute map as provided by the caller. */
+  /** Attribute map: the logger's global attributes merged with the caller's, the caller winning. */
   attrs: Record<string, unknown>;
+  /**
+   * The record rendered through the logger's output template, when one is set
+   * via `logger.template()`. Presentation only — `message` remains the
+   * canonical, searchable text. `secure()` / `redact()` values are always
+   * masked here, so this string is safe to print anywhere.
+   */
+  formatted?: string;
   timestamp: Date;
   application?: string;
   version?: string;
