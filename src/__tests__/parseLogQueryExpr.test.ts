@@ -374,3 +374,38 @@ describe("formatExpr", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nested path keys inside boolean expressions.
+// ---------------------------------------------------------------------------
+
+describe("parseLogQueryExpr — path keys", () => {
+  it("parses path leaves in AND / OR / groups", () => {
+    expect(parse("session.id:='1' users[*]:='2'")).toEqual(
+      q(f("session.id", "=", "1"), f("users[*]", "=", "2")),
+    );
+    expect(parse("session.id:='1' || cart.items[*].sku:='A'")).toEqual(
+      and(or(f("session.id", "=", "1"), f("cart.items[*].sku", "=", "A"))),
+    );
+  });
+
+  it("round-trips mixed path and literal keys through formatExpr", () => {
+    const r = parseLogQueryExpr("session.id:='1' 'a.b':='2' users[*]:!'x'");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.val) {
+      const reparsed = parseLogQueryExpr(formatExpr(r.val));
+      expect(reparsed.ok).toBe(true);
+      if (reparsed.ok) expect(reparsed.val).toEqual(r.val);
+    }
+  });
+
+  it("round-trips null literals through formatExpr", () => {
+    const r = parseLogQueryExpr("reason:=null || 'reason':='null'");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.val) {
+      const reparsed = parseLogQueryExpr(formatExpr(r.val));
+      expect(reparsed.ok).toBe(true);
+      if (reparsed.ok) expect(reparsed.val).toEqual(r.val);
+    }
+  });
+});

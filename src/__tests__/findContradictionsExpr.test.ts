@@ -98,3 +98,37 @@ describe("isUnsatisfiable", () => {
     expect(isUnsatisfiable(tree("a:='1' || a:!='1'"))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Path vs literal keys — same text, different namespaces.
+// ---------------------------------------------------------------------------
+
+import { parseLogQueryExpr as parseExprForPaths } from "../logger/parseLogQuery";
+
+describe("findContradictions — path and literal keys", () => {
+  const tree = (q: string) => {
+    const r = parseExprForPaths(q);
+    if (!r.ok) throw r.err;
+    return r.val;
+  };
+
+  it("does not flag a literal key against a same-text path key", () => {
+    expect(findContradictions(tree("'a.b':='1' a.b:='2'"))).toEqual([]);
+  });
+
+  it("still flags a genuine contradiction on a path key", () => {
+    expect(findContradictions(tree("a.b:='1' a.b:!='1'"))).toHaveLength(1);
+  });
+
+  it("treats users[*] and users[0] as independent keys", () => {
+    expect(findContradictions(tree("users[*]:='1' users[0]:!='1'"))).toEqual([]);
+  });
+
+  it("flags key:=null against key:!=null", () => {
+    expect(findContradictions(tree("reason:=null reason:!=null"))).toHaveLength(1);
+  });
+
+  it("does not flag key:=null against key:='null' (string)", () => {
+    expect(findContradictions(tree("reason:=null reason:!='null'"))).toEqual([]);
+  });
+});

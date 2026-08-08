@@ -35,6 +35,76 @@ export interface LogQueryToken {
   value: string;
   /** When true, the filter is negated (NOT LIKE / NOT IN) */
   negated?: boolean;
+  /**
+   * When true, `key` is a literal flat attribute name even though it contains
+   * path characters (`.` / `[`): the user quoted it (`'a.b':'x'`). A bare
+   * dotted/bracketed key is a path into a JSON attribute instead. Only set
+   * when it is load-bearing — a quoted key without path characters keeps
+   * today's token shape.
+   */
+  literalKey?: boolean;
+  /**
+   * When true, the (unquoted) value was the bare word `null`/`NULL` with an
+   * equality-ish operator: the filter matches the null literal, not the string
+   * "null". A quoted `'null'` stays a plain string comparison. `value` is
+   * normalized to `"null"`.
+   */
+  nullValue?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Attribute paths — the shared grammar for `session.id` / `users[*]` keys.
+// ---------------------------------------------------------------------------
+
+/** One step of an attribute path: an object member, an array index, or `[*]`. */
+export type PathSegment =
+  | { type: "member"; name: string }
+  | { type: "index"; index: number }
+  | { type: "wildcard" };
+
+/** A parsed attribute path: the base attribute name plus the steps into it. */
+export type AttrPath = { base: string; segments: PathSegment[] };
+
+/**
+ * Parse a query key into an attribute path: `base ( '.' member | '[' (digits | '*') ']' )*`.
+ * Returns `null` when the key contains no path syntax at all, and also for
+ * malformed paths (`a[`, `a..b`, `a[x]`) — a null result means "treat as a
+ * flat attribute name", which keeps odd flat keys working as before.
+ */
+export function parseAttrPath(key: string): AttrPath | null {
+  if (!/[.[]/.test(key)) return null;
+
+  // base: everything before the first '.' or '['
+  const baseMatch = /^[^.[\]]+/.exec(key);
+  if (!baseMatch) return null;
+  const base = baseMatch[0];
+  const segments: PathSegment[] = [];
+  let i = base.length;
+
+  while (i < key.length) {
+    if (key[i] === ".") {
+      const m = /^[^.[\]]+/.exec(key.slice(i + 1));
+      if (!m) return null; // trailing dot or empty member (`a..b`, `a.`)
+      segments.push({ type: "member", name: m[0] });
+      i += 1 + m[0].length;
+    } else if (key[i] === "[") {
+      const close = key.indexOf("]", i + 1);
+      if (close === -1) return null; // unclosed bracket
+      const inner = key.slice(i + 1, close);
+      if (inner === "*") {
+        segments.push({ type: "wildcard" });
+      } else if (/^\d+$/.test(inner)) {
+        segments.push({ type: "index", index: parseInt(inner, 10) });
+      } else {
+        return null; // `a[]`, `a[x]`, `a[-1]`, `a[1.2]`
+      }
+      i = close + 1;
+    } else {
+      return null; // text directly after `]` (`a[*]b`)
+    }
+  }
+
+  return { base, segments };
 }
 
 /**
@@ -239,8 +309,10 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
 
   // Now read the value — quoted or bare word
   let value: string | null = null;
+  let valueWasQuoted = false;
   if (cur.i < cur.input.length && (cur.input[cur.i] === "'" || cur.input[cur.i] === '"')) {
     value = readQuotedValue(cur);
+    valueWasQuoted = true;
   } else {
     value = readBareWord(cur);
     if (!value) {
@@ -250,7 +322,23 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
   }
 
   if (value !== null) {
-    return { key, operator, value, negated };
+    const token: LogQueryToken = { key, operator, value, negated };
+    // A quoted key containing path characters is a literal flat name; a bare
+    // dotted/bracketed key means a path. The flag is only set when it is
+    // load-bearing, so plain quoted keys keep their existing token shape.
+    if (keyWasQuoted && /[.[]/.test(key)) token.literalKey = true;
+    // A BARE null/NULL with an equality-ish operator is the null literal;
+    // a quoted 'null' stays the string. Range comparisons keep string
+    // semantics — ordering against null is meaningless.
+    if (
+      !valueWasQuoted &&
+      (value === "null" || value === "NULL") &&
+      (operator === "=" || operator === "contains")
+    ) {
+      token.value = "null";
+      token.nullValue = true;
+    }
+    return token;
   }
   // fallback
   cur.i = start;
@@ -436,7 +524,13 @@ function isImpossibleRange(a: LogQueryToken, b: LogQueryToken): boolean {
 
 /** True when two tokens on the same key can never both hold. */
 function isContradictoryPair(ta: LogQueryToken, tb: LogQueryToken): boolean {
+  // Same key text is not enough: a literal flat key ('a.b') and a same-text
+  // path key (a.b) live in different namespaces, as do the null literal and
+  // the string "null". Overlapping paths (users[*] vs users[0]) are treated
+  // as distinct keys — missed detections, never false positives.
   if (ta.key !== tb.key) return false;
+  if (!!ta.literalKey !== !!tb.literalKey) return false;
+  if (!!ta.nullValue !== !!tb.nullValue) return false;
   return (
     (ta.operator === tb.operator && ta.value === tb.value && !!ta.negated !== !!tb.negated) ||
     isImpossibleRange(ta, tb)
@@ -553,10 +647,16 @@ export function formatToken(token: LogQueryToken): string {
   } else {
     opStr = token.operator === "contains" ? ":" : `:${token.operator}`;
   }
-  // Quote the key if it contains spaces or special characters
-  const key = /[\s:'"=<>!]/.test(token.key)
-    ? `'${token.key.replace(/'/g, "\\'")}'`
-    : token.key;
+  // Quote the key if it contains spaces or special characters, or when it is
+  // a literal flat name containing path characters (quoting is what marks it
+  // literal — a bare dotted key would re-parse as a path).
+  const key =
+    token.literalKey || /[\s:'"=<>!]/.test(token.key)
+      ? `'${token.key.replace(/'/g, "\\'")}'`
+      : token.key;
+  // A null literal renders as the bare word so it re-parses with nullValue;
+  // the string "null" keeps the quotes that distinguish it.
+  if (token.nullValue) return `${key}${opStr}null`;
   const value = token.value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   return `${key}${opStr}'${value}'`;
 }

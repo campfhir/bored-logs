@@ -428,3 +428,160 @@ describe("findContradictions", () => {
     expect(findContradictions(tokens)).toHaveLength(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nested attribute paths — bare dotted/bracketed keys are paths; quoted keys
+// are literal flat names. parseAttrPath is the shared path grammar.
+// ---------------------------------------------------------------------------
+
+import { parseAttrPath } from "../logger/parseLogQuery";
+
+describe("path keys and literalKey", () => {
+  it("keeps dots and brackets intact in a bare key", () => {
+    expect(parseLogQuery("session.id:'123'")[0]).toEqual({
+      key: "session.id", operator: "contains", value: "123", negated: undefined,
+    });
+    expect(parseLogQuery("cart.items[*].sku:='A-1'")[0]).toEqual({
+      key: "cart.items[*].sku", operator: "=", value: "A-1", negated: undefined,
+    });
+  });
+
+  it("flags a quoted key containing path characters as literal", () => {
+    expect(parseLogQuery("'session.id':'123'")[0]).toEqual({
+      key: "session.id", operator: "contains", value: "123",
+      negated: undefined, literalKey: true,
+    });
+    expect(parseLogQuery("'users[*]':='x'")[0]).toEqual({
+      key: "users[*]", operator: "=", value: "x", negated: undefined, literalKey: true,
+    });
+  });
+
+  it("does not flag a quoted key without path characters", () => {
+    // Shape stability: existing quoted-key queries keep their exact token shape.
+    expect(parseLogQuery("'some key':'v'")[0]).toEqual({
+      key: "some key", operator: "contains", value: "v", negated: undefined,
+    });
+  });
+
+  it("formatToken leaves a path key bare and re-quotes a literal key", () => {
+    expect(formatToken({ key: "session.id", operator: "=", value: "123" }))
+      .toBe("session.id:='123'");
+    expect(formatToken({ key: "session.id", operator: "=", value: "123", literalKey: true }))
+      .toBe("'session.id':='123'");
+  });
+
+  it("round-trips a literal key through format → parse", () => {
+    const token = parseLogQuery("'a.b':='x'")[0];
+    expect(parseLogQuery(formatToken(token))[0]).toEqual(token);
+  });
+});
+
+describe("parseAttrPath", () => {
+  it("returns null for keys without path syntax", () => {
+    expect(parseAttrPath("session")).toBeNull();
+    expect(parseAttrPath("$level")).toBeNull();
+    expect(parseAttrPath("user_name")).toBeNull();
+  });
+
+  it("parses member paths", () => {
+    expect(parseAttrPath("session.id")).toEqual({
+      base: "session",
+      segments: [{ type: "member", name: "id" }],
+    });
+    expect(parseAttrPath("a.b.c")).toEqual({
+      base: "a",
+      segments: [{ type: "member", name: "b" }, { type: "member", name: "c" }],
+    });
+  });
+
+  it("parses index and wildcard segments", () => {
+    expect(parseAttrPath("users[*]")).toEqual({
+      base: "users", segments: [{ type: "wildcard" }],
+    });
+    expect(parseAttrPath("users[0]")).toEqual({
+      base: "users", segments: [{ type: "index", index: 0 }],
+    });
+    expect(parseAttrPath("users[12]")).toEqual({
+      base: "users", segments: [{ type: "index", index: 12 }],
+    });
+  });
+
+  it("parses combined paths", () => {
+    expect(parseAttrPath("cart.items[*].sku")).toEqual({
+      base: "cart",
+      segments: [
+        { type: "member", name: "items" },
+        { type: "wildcard" },
+        { type: "member", name: "sku" },
+      ],
+    });
+    expect(parseAttrPath("m[0][1]")).toEqual({
+      base: "m",
+      segments: [{ type: "index", index: 0 }, { type: "index", index: 1 }],
+    });
+  });
+
+  it("returns null for malformed paths (treated as flat keys)", () => {
+    for (const bad of ["a[", "a[]", "a[x]", "a[1.2]", "a..b", ".a", "a.", "a[*]b", "a[-1]"]) {
+      expect(parseAttrPath(bad), bad).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Null literals — bare `null`/`NULL` with = / contains means the null literal;
+// quoted 'null' is the string.
+// ---------------------------------------------------------------------------
+
+describe("null literals", () => {
+  it("flags a bare null value on = and contains", () => {
+    expect(parseLogQuery("reason:=null")[0]).toEqual({
+      key: "reason", operator: "=", value: "null", negated: undefined, nullValue: true,
+    });
+    expect(parseLogQuery("reason:=NULL")[0]).toEqual({
+      key: "reason", operator: "=", value: "null", negated: undefined, nullValue: true,
+    });
+    expect(parseLogQuery("reason:null")[0]).toEqual({
+      key: "reason", operator: "contains", value: "null", negated: undefined, nullValue: true,
+    });
+  });
+
+  it("keeps negation", () => {
+    expect(parseLogQuery("reason:!=null")[0]).toEqual({
+      key: "reason", operator: "=", value: "null", negated: true, nullValue: true,
+    });
+    expect(parseLogQuery("reason:!null")[0]).toEqual({
+      key: "reason", operator: "contains", value: "null", negated: true, nullValue: true,
+    });
+  });
+
+  it("treats a QUOTED 'null' as the plain string", () => {
+    expect(parseLogQuery("reason:='null'")[0]).toEqual({
+      key: "reason", operator: "=", value: "null", negated: undefined,
+    });
+  });
+
+  it("keeps string semantics for range operators", () => {
+    expect(parseLogQuery("reason:>null")[0]).toEqual({
+      key: "reason", operator: ">", value: "null", negated: undefined,
+    });
+  });
+
+  it("formatToken renders a null literal unquoted and the string quoted", () => {
+    expect(formatToken({ key: "reason", operator: "=", value: "null", nullValue: true }))
+      .toBe("reason:=null");
+    expect(formatToken({ key: "reason", operator: "=", value: "null", negated: true, nullValue: true }))
+      .toBe("reason:!=null");
+    expect(formatToken({ key: "reason", operator: "contains", value: "null", nullValue: true }))
+      .toBe("reason:null");
+    expect(formatToken({ key: "reason", operator: "=", value: "null" }))
+      .toBe("reason:='null'");
+  });
+
+  it("round-trips both forms", () => {
+    for (const q of ["reason:=null", "reason:!=null", "reason:null", "reason:='null'"]) {
+      const token = parseLogQuery(q)[0];
+      expect(parseLogQuery(formatToken(token))[0], q).toEqual(token);
+    }
+  });
+});
