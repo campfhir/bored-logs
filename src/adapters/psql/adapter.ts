@@ -270,6 +270,15 @@ function textValuePredicate(
   eb: ExpressionBuilder<any, any>,
   ref: RawBuilder<any>,
   token: LogQueryToken,
+  /**
+   * Type gate for the lexicographic fallback: ordering with a value that is
+   * neither numeric nor date-shaped is only meaningful between STRINGS, so the
+   * caller supplies a "this value is string-typed" predicate and typed
+   * (number/date) rows are excluded instead of being text-compared —
+   * `userId:<'A'` must never match `userId = 123` because '123' < 'A'.
+   * (The wildcard jsonpath compilation gets this via `@.type() == "string"`.)
+   */
+  stringTypeGuard: Expression<SqlBool>,
 ): Expression<SqlBool> {
   const { operator, value } = token;
   if (operator === "contains") return sql<boolean>`${ref} like ${`%${value}%`}`;
@@ -295,7 +304,7 @@ function textValuePredicate(
       sql<boolean>`${ref}::timestamptz ${sql.raw(operator)} ${value}::timestamptz`,
     ]);
   }
-  return sql<boolean>`${ref} ${sql.raw(operator)} ${value}`;
+  return eb.and([stringTypeGuard, sql<boolean>`${ref} ${sql.raw(operator)} ${value}`]);
 }
 
 /** Value predicate inside a log_attr EXISTS subquery. */
@@ -306,7 +315,12 @@ function attrValuePredicate(
   // A flat null literal matches by TYPE — that's how `serializeAttrValue`
   // stores a null attribute (val_type='null', val NULL).
   if (token.nullValue) return sql<boolean>`${sql.ref("log_attr.val_type")} = 'null'`;
-  return textValuePredicate(eb, sql.ref("log_attr.val"), token);
+  return textValuePredicate(
+    eb,
+    sql.ref("log_attr.val"),
+    token,
+    sql<boolean>`${sql.ref("log_attr.val_type")} = 'string'`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -417,9 +431,16 @@ function pathPredicate(
       inner = sql<boolean>`${sql.ref("log_attr.val")}::jsonb #> ${arr}::text[] = 'null'::jsonb`;
     } else {
       // Extract text and reuse the exact flat-value operator semantics
-      // (#>> renders JSON string "123" and number 123 identically).
+      // (#>> renders JSON string "123" and number 123 identically). The
+      // string-type gate for lexicographic ordering checks the JSON type of
+      // the element at the path.
       const extracted = sql`(${sql.ref("log_attr.val")}::jsonb #>> ${arr}::text[])`;
-      inner = textValuePredicate(eb, extracted, token);
+      inner = textValuePredicate(
+        eb,
+        extracted,
+        token,
+        sql<boolean>`jsonb_typeof(${sql.ref("log_attr.val")}::jsonb #> ${arr}::text[]) = 'string'`,
+      );
     }
   }
 

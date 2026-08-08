@@ -429,3 +429,39 @@ describe("PostgresAdapter e2e — query builder", () => {
     }
   });
 });
+
+describe("PostgresAdapter e2e — typed values never fall back to lexical ordering", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("info", "number-attr", { userId: 123 }),
+      rec("info", "string-attr", { userId: "Zed" }),
+      rec("info", "date-attr", { userId: new Date("2003-01-02T00:00:00Z") }),
+      rec("info", "nested", { session: { id: "abc", count: 42 } }),
+    );
+  });
+
+  it("a non-numeric comparison value never matches number- or date-typed attrs", async () => {
+    // '123' < 'A' and '2003-…' < 'A' lexicographically — the old behavior
+    // matched both. Only the string attr may participate.
+    expect(await search("userId:<'A'")).toEqual([]);
+    expect(await search("userId:>'A'")).toEqual(["string-attr"]);
+  });
+
+  it("string ordering still works on string attrs", async () => {
+    expect(await search("userId:>'M'")).toEqual(["string-attr"]);
+    expect(await search("userId:<'M'")).toEqual([]);
+  });
+
+  it("typed comparisons still work on typed attrs", async () => {
+    expect(await search("userId:>'100'")).toEqual(["number-attr"]);
+    expect(await search("userId:>'2003-01-01'")).toEqual(["date-attr"]);
+  });
+
+  it("a concrete-path comparison only orders JSON strings", async () => {
+    // session.count = 42 (JSON number): '42' < 'a' lexicographically, but it
+    // must not participate. session.id = "abc" > "a" does.
+    expect(await search("session.id:>'a'")).toEqual(["nested"]);
+    expect(await search("session.count:<'a'")).toEqual([]);
+    expect(await search("session.count:>'40'")).toEqual(["nested"]); // numeric still fine
+  });
+});

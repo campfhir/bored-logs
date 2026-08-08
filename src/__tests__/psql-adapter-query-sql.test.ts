@@ -572,3 +572,54 @@ describe("PostgresAdapter.query — null literals", () => {
     expect(jsonpath).toContain("@ == null");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ordering fallback is string-only: a non-numeric, non-date comparison value
+// must never sweep number/date-typed rows into lexicographic comparison.
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter.query — lexicographic fallback is gated to strings", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+
+  it("guards a flat lexicographic comparison with val_type = 'string'", async () => {
+    const q = await mainQuery("userId:>'A'");
+    expect(q.sql).toMatch(/"val_type" = 'string'/);
+  });
+
+  it("guards a concrete-path lexicographic comparison with jsonb_typeof", async () => {
+    const q = await mainQuery("session.id:>'a'");
+    expect(q.sql).toMatch(/jsonb_typeof/);
+  });
+
+  it("does not add the string guard to numeric or date comparisons", async () => {
+    const num = await mainQuery("count:>'10'");
+    expect(num.sql).not.toMatch(/"val_type" = 'string'/);
+    const date = await mainQuery("deployedAt:>'2003-01-02'");
+    expect(date.sql).not.toMatch(/"val_type" = 'string'/);
+  });
+
+  it("does not add the string guard to contains or equality", async () => {
+    const eq = await mainQuery("userId:='A'");
+    expect(eq.sql).not.toMatch(/"val_type" = 'string'/);
+  });
+});

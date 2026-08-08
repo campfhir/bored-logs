@@ -696,7 +696,15 @@ type LogQueryToken = {
 };
 ```
 
-Comparison operators (`>`, `>=`, `<`, `<=`) compare **numerically** when the value looks like a number, **chronologically** when it looks like an ISO-8601 / RFC-3339 date or date-time (both the stored value and the filter value are cast to `timestamptz`, so `'2003-01-02'` and `'2003-01-02T09:30:00Z'` order by instant, not lexically), and as **text** otherwise. Each cast is guarded by a regex so rows whose value isn't a number/date don't raise a cast error.
+Comparison operators (`>`, `>=`, `<`, `<=`) dispatch on the **filter value's** shape, and each branch only compares against compatibly-typed stored values:
+
+| Filter value looks like | Comparison | Participating rows |
+| --- | --- | --- |
+| a number (`'100'`) | numeric (`::numeric`) | values whose text is numeric — includes numbers stored as strings |
+| an ISO/RFC date (`'2003-01-02'`) | chronological (`::timestamptz`) | values whose text is date-shaped |
+| anything else (`'M'`) | lexicographic text | **string-typed values only** |
+
+The casts are regex-guarded so incompatible rows are *excluded* rather than raising errors, and the text branch is gated to string-typed values — so a stored `userId = 123` is never swept into a lexicographic comparison by `userId:<'A'` (where `'123' < 'A'` would spuriously match). There is no cross-type fallback in either direction; the same rules apply inside [nested paths](#nested-attribute-paths).
 
 ---
 
