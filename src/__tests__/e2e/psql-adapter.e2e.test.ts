@@ -101,11 +101,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await sql`truncate logs, log_attr, log_attr_blob restart identity cascade`.execute(db);
+  await sql`truncate logs, log_attr, log_attr_blob, log_purge_job, log_purge_ids restart identity cascade`.execute(db);
 });
 
 describe("PostgresAdapter e2e — schema", () => {
-  it("reports both migrations as applied", async () => {
+  it("reports every migration as applied", async () => {
     const status = await adapter.migrationStatus();
     expect(status.every((s) => s.applied)).toBe(true);
   });
@@ -342,6 +342,133 @@ describe("PostgresAdapter e2e — async purge", () => {
     const res = await adapter.purgeStatus("does-not-exist");
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.err.message).toBe("unknown purge id");
+  });
+});
+
+describe("PostgresAdapter e2e — purge persistence across instances", () => {
+  /** A second adapter over the same DB — simulates another process/instance. */
+  function otherInstance(): PostgresAdapter {
+    return new PostgresAdapter({ db, purgeSweepIntervalMs: 0 });
+  }
+
+  async function awaitPurgeOn(inst: PostgresAdapter, id: string) {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const status = await inst.purgeStatus(id);
+      if (!status.ok) throw status.err;
+      if (status.val.status !== "running") return status.val;
+      if (Date.now() > deadline) throw new Error("purge did not settle in time");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  async function seedOld(n: number): Promise<Date> {
+    const old = Array.from({ length: n }, (_, i) => rec("info", `old-${i}`, { i: String(i) }));
+    await seed(...old, rec("info", "keep me", { a: "1" }));
+    await sql`update logs set logged_timestamp = now() - interval '10 days' where message like 'old-%'`.execute(db);
+    await sql`update log_attr set logged_timestamp = now() - interval '10 days'
+              where log_id in (select log_id from logs where message like 'old-%')`.execute(db);
+    return new Date(Date.now() - 24 * 60 * 60 * 1000);
+  }
+
+  it("a job parked by one instance can be confirmed and processed by another", async () => {
+    const cutoff = await seedOld(4);
+    const planned = await adapter.purge(cutoff, { confirmationThreshold: 2 });
+    expect(planned.ok && planned.val.status).toBe("awaiting-confirmation");
+    if (!planned.ok) return;
+
+    const b = otherInstance();
+    try {
+      // B has no memory of the job — it must find and start it via the DB row.
+      const confirmed = await b.confirmPurge(planned.val.id);
+      expect(confirmed.ok).toBe(true);
+      const done = await awaitPurgeOn(b, planned.val.id);
+      expect(done.status).toBe("completed");
+      expect(done.deletedLogs).toBe(4);
+    } finally {
+      await b.close();
+    }
+
+    const remaining = await adapter.query({});
+    expect(remaining.ok && remaining.val.map((r) => r.message)).toEqual(["keep me"]);
+    // Completion left no residue: both purge tables are empty.
+    const jobs = await sql`select count(*) as n from log_purge_job`.execute(db);
+    const ids = await sql`select count(*) as n from log_purge_ids`.execute(db);
+    expect(Number((jobs.rows[0] as { n: string }).n)).toBe(0);
+    expect(Number((ids.rows[0] as { n: string }).n)).toBe(0);
+  });
+
+  it("sweepPurgeJobs resumes an orphaned running job (dead instance, expired lock)", async () => {
+    const cutoff = await seedOld(5);
+
+    // Manufacture the aftermath of a crashed instance: a running job row with
+    // an expired lock and a captured (partially drained) id set.
+    await sql`insert into log_purge_job
+        (purge_id, until_ts, status, log_count, attr_count, deleted_logs, deleted_attrs,
+         batch_size, requires_confirmation, ids_captured, created_at, started_at,
+         locked_by, lock_expires_at)
+      values ('orphan-1', ${cutoff}, 'running', 5, 5, 0, 0, 2, false, true,
+              now(), now(), 'dead-instance', now() - interval '5 minutes')`.execute(db);
+    await sql`insert into log_purge_ids (purge_id, log_id)
+      select 'orphan-1', log_id from logs where logged_timestamp <= ${cutoff}`.execute(db);
+
+    const b = otherInstance();
+    try {
+      const resumed = await b.sweepPurgeJobs();
+      expect(resumed).toBe(1);
+      const done = await awaitPurgeOn(b, "orphan-1");
+      expect(done.status).toBe("completed");
+    } finally {
+      await b.close();
+    }
+
+    const remaining = await adapter.query({});
+    expect(remaining.ok && remaining.val.map((r) => r.message)).toEqual(["keep me"]);
+    const ids = await sql`select count(*) as n from log_purge_ids`.execute(db);
+    expect(Number((ids.rows[0] as { n: string }).n)).toBe(0);
+  });
+
+  it("sweepPurgeJobs skips a job whose lock is still fresh", async () => {
+    const cutoff = await seedOld(2);
+    await sql`insert into log_purge_job
+        (purge_id, until_ts, status, log_count, attr_count, batch_size,
+         requires_confirmation, ids_captured, created_at, locked_by, lock_expires_at)
+      values ('busy-1', ${cutoff}, 'running', 2, 2, 2, false, true, now(),
+              'other-live-instance', now() + interval '60 seconds')`.execute(db);
+    await sql`insert into log_purge_ids (purge_id, log_id)
+      select 'busy-1', log_id from logs where logged_timestamp <= ${cutoff}`.execute(db);
+
+    const b = otherInstance();
+    try {
+      expect(await b.sweepPurgeJobs()).toBe(0);
+    } finally {
+      await b.close();
+    }
+    // Untouched — the live owner keeps it.
+    const ids = await sql`select count(*) as n from log_purge_ids`.execute(db);
+    expect(Number((ids.rows[0] as { n: string }).n)).toBe(2);
+  });
+
+  it("purgeStatus works cross-instance while a job exists", async () => {
+    const cutoff = await seedOld(3);
+    const planned = await adapter.purge(cutoff, { confirmationThreshold: 2 });
+    expect(planned.ok && planned.val.status).toBe("awaiting-confirmation");
+    if (!planned.ok) return;
+
+    const b = otherInstance();
+    try {
+      const seen = await b.purgeStatus(planned.val.id);
+      expect(seen.ok).toBe(true);
+      if (seen.ok) {
+        expect(seen.val.status).toBe("awaiting-confirmation");
+        expect(seen.val.logCount).toBe(3);
+      }
+    } finally {
+      await b.close();
+    }
+    // Clean up: confirm + drain so the truncate-based teardown stays quiet.
+    await adapter.confirmPurge(planned.val.id);
+    await awaitPurgeOn(adapter, planned.val.id);
   });
 });
 

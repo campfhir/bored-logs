@@ -185,12 +185,13 @@ export type PurgeError = "failed to purge" | "unknown purge id";
 export type PurgeJobStatus =
   /** The impacted count met the confirmation threshold; nothing is deleted until {@link QueryableLogAdapter.confirmPurge}. */
   | "awaiting-confirmation"
-  /** Background batched deletion is in progress. */
+  /**
+   * Background batched deletion is in progress (or resumable: a job whose
+   * processing instance died keeps this status until a sweep picks it up).
+   */
   | "running"
   | "completed"
-  | "failed"
-  /** The adapter was closed mid-purge; deletion stopped after the current batch. */
-  | "aborted";
+  | "failed";
 
 /**
  * The plan/progress snapshot returned by the purge APIs. `purge()` measures

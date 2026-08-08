@@ -12,6 +12,7 @@
 import type { Kysely, Migration, MigrationProvider } from "kysely";
 import { up as up001, down as down001 } from "./001_logs";
 import { up as up002, down as down002 } from "./002_attr_val_name_index";
+import { up as up003, down as down003 } from "./003_purge_jobs";
 
 /**
  * Every log-adapter migration, keyed by name. The keys sort ascending in the
@@ -21,6 +22,7 @@ import { up as up002, down as down002 } from "./002_attr_val_name_index";
 export const MIGRATIONS: Record<string, Required<Migration>> = {
   "001_logs": { up: up001, down: down001 },
   "002_attr_val_name_index": { up: up002, down: down002 },
+  "003_purge_jobs": { up: up003, down: down003 },
 };
 
 /** Migration names in canonical (apply) order. Reverse it for rollback order. */

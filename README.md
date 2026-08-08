@@ -700,7 +700,14 @@ if (planned.ok && planned.val.requiresConfirmation) {
 | `options.confirmationThreshold` | `number` | `10 000` | Impacted-row count (logs + attrs) requiring `confirmPurge`      |
 | `options.batchSize`             | `number` | `1 000`  | Logs deleted per background batch                               |
 
-Both defaults are configurable on the adapter: `new PostgresAdapter({ db, purgeConfirmationThreshold, purgeBatchSize })`. Jobs are held in the adapter's memory (latest 100) — a process restart forgets un-started jobs, and `adapter.close()` lets the current batch finish before marking in-flight jobs `"aborted"`.
+Both defaults are configurable on the adapter: `new PostgresAdapter({ db, purgeConfirmationThreshold, purgeBatchSize })`.
+
+**Jobs are persistent and multi-instance safe** (migration `003_purge_jobs`, tables `log_purge_job` + `log_purge_ids`):
+
+- When deletion starts, the impacted log ids are captured into `log_purge_ids` and **drained batch by batch** — each batch is a single atomic statement, progress is exact, and the ids never leave the database (callers only ever see the job id and aggregate counts).
+- The whole flow works **across processes**: any instance can `confirmPurge` / `purgeStatus` a job planned by another, since the row is the source of truth.
+- A **TTL lock** (`purgeLockTtlMs`, default 60 s, re-extended every batch) ensures exactly one instance processes a job. If that instance dies or is closed mid-run, the job's row stays `"running"` with its lock released/expired, and the **sweep** — automatic every `purgeSweepIntervalMs` (default 60 s, `0` disables), or manual via `adapter.sweepPurgeJobs()` — claims and resumes it from the surviving ids.
+- When `log_purge_ids` is empty the job row is deleted — completion leaves no residue. One consequence: after completion, only the instance that processed the job can still report it as `"completed"` (from its in-memory snapshot); an instance that never saw the job gets `unknown purge id`. Treat "known id turned unknown after running" as finished.
 
 ### `deepPurge` options
 

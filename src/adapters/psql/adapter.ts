@@ -97,15 +97,42 @@ interface TempTableSelectedAttributes {
   val: string;
 }
 
+/** Persistent purge job row (migration 003). */
+interface LogPurgeJobTable {
+  purge_id: string;
+  until_ts: Date;
+  status: string;
+  log_count: number;
+  attr_count: number;
+  deleted_logs: Generated<number>;
+  deleted_attrs: Generated<number>;
+  batch_size: number;
+  requires_confirmation: boolean;
+  ids_captured: Generated<boolean>;
+  error: string | null;
+  created_at: Generated<Date>;
+  started_at: Date | null;
+  locked_by: string | null;
+  lock_expires_at: Date | null;
+}
+
+/** Captured id set a purge job drains (migration 003). */
+interface LogPurgeIdsTable {
+  purge_id: string;
+  log_id: string;
+}
+
 /**
  * Minimal Kysely DB interface required by this package.
- * Your application DB type must include (at minimum) these three tables.
+ * Your application DB type must include (at minimum) these tables.
  */
 export interface LoggerTables {
   logs: LogTable;
   log_attr: LogAttributeTable;
   log_attr_blob: LogBlobAttributeTable;
   selected_attributes: TempTableSelectedAttributes;
+  log_purge_job: LogPurgeJobTable;
+  log_purge_ids: LogPurgeIdsTable;
 }
 
 /** A selected row from the `logs` table. */
@@ -517,10 +544,45 @@ function generatePurgeId(): string {
   return `purge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Public copy of a purge job, without the internal batch-size field. */
-function snapshotPurgeJob(job: PurgeJob & { _batchSize: number }): PurgeJob {
-  const { _batchSize, ...pub } = job;
+/** In-process purge job record: the public shape plus processing internals. */
+type InternalPurgeJob = PurgeJob & { _batchSize: number; _idsCaptured: boolean };
+
+/** A selected `log_purge_job` row. */
+type PurgeJobRow = Selectable<LogPurgeJobTable>;
+
+/** Public copy of a purge job, without the internal fields. */
+function snapshotPurgeJob(job: InternalPurgeJob): PurgeJob {
+  const { _batchSize, _idsCaptured, ...pub } = job;
   return { ...pub };
+}
+
+/** Map a `log_purge_job` row to the public {@link PurgeJob} shape. */
+function purgeRowToJob(row: PurgeJobRow): PurgeJob {
+  const logCount = Number(row.log_count);
+  const attrCount = Number(row.attr_count);
+  return {
+    id: row.purge_id,
+    until: new Date(row.until_ts).toISOString(),
+    status: row.status as PurgeJob["status"],
+    logCount,
+    attrCount,
+    totalCount: logCount + attrCount,
+    requiresConfirmation: row.requires_confirmation,
+    deletedLogs: Number(row.deleted_logs),
+    deletedAttrs: Number(row.deleted_attrs),
+    ...(row.error != null ? { error: row.error } : {}),
+    createdAt: new Date(row.created_at).toISOString(),
+    ...(row.started_at != null ? { startedAt: new Date(row.started_at).toISOString() } : {}),
+  };
+}
+
+/** Map a `log_purge_job` row to the internal processing record. */
+function purgeRowToInternal(row: PurgeJobRow): InternalPurgeJob {
+  return {
+    ...purgeRowToJob(row),
+    _batchSize: Number(row.batch_size),
+    _idsCaptured: row.ids_captured,
+  };
 }
 
 /** A single filter leaf → a built-in column comparison or a correlated (NOT) EXISTS on log_attr. */
@@ -602,6 +664,17 @@ export type PostgresAdapterOptions = {
   purgeConfirmationThreshold?: number;
   /** Logs deleted per background purge batch. Defaults to 1 000. */
   purgeBatchSize?: number;
+  /**
+   * TTL on a purge job's processing lock, in ms. Defaults to 60 000. The lock
+   * is re-extended (heartbeat) on every batch; when an instance dies, its jobs
+   * become sweepable once the TTL lapses.
+   */
+  purgeLockTtlMs?: number;
+  /**
+   * Interval between automatic {@link PostgresAdapter.sweepPurgeJobs} runs, in
+   * ms. Defaults to 60 000; pass 0 to disable the automatic sweep.
+   */
+  purgeSweepIntervalMs?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -715,11 +788,16 @@ export class PostgresAdapter implements QueryableLogAdapter {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Purge job state ───────────────────────────────────────────────────────
-  private readonly _purgeJobs = new Map<string, PurgeJob & { _batchSize: number }>();
+  // In-process snapshots — the DB row is authoritative while a job exists;
+  // this map preserves terminal snapshots (a completed job's row is deleted).
+  private readonly _purgeJobs = new Map<string, InternalPurgeJob>();
   private readonly _activePurges = new Set<Promise<void>>();
   private _closing = false;
   private readonly _purgeThreshold: number;
   private readonly _purgeBatchSize: number;
+  private readonly _purgeLockTtlMs: number;
+  private readonly _instanceId: string = generatePurgeId();
+  private _sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   private readonly BATCH_SIZE = 50;
   private readonly FLUSH_INTERVAL_MS = 5000;
@@ -757,8 +835,11 @@ export class PostgresAdapter implements QueryableLogAdapter {
     this._levels = { ...LOG_LEVELS, ...opts.levels };
     this._purgeThreshold = opts.purgeConfirmationThreshold ?? this.PURGE_CONFIRMATION_THRESHOLD;
     this._purgeBatchSize = opts.purgeBatchSize ?? this.PURGE_BATCH_SIZE;
+    this._purgeLockTtlMs = opts.purgeLockTtlMs ?? 60_000;
 
     this._startFlushTimer();
+    const sweepInterval = opts.purgeSweepIntervalMs ?? 60_000;
+    if (sweepInterval > 0) this._startSweepTimer(sweepInterval);
   }
 
   /** The minimum level currently written to the database. */
@@ -889,15 +970,19 @@ export class PostgresAdapter implements QueryableLogAdapter {
   /**
    * Plan a purge of rows with `logged_timestamp <= until` and return
    * immediately: the impacted `logs` / attribute rows are counted up front,
-   * and the returned {@link PurgeJob} carries the counts plus an `id` for
-   * {@link purgeStatus} / {@link confirmPurge}.
+   * a persistent job row is written to `log_purge_job`, and the returned
+   * {@link PurgeJob} carries the counts plus an `id` for {@link purgeStatus} /
+   * {@link confirmPurge}.
    *
    * When the total is below the confirmation threshold, batched deletion
    * starts in the background right away; at or above it, the job parks as
    * `awaiting-confirmation` and nothing is deleted until {@link confirmPurge}.
-   * Each batch is its own short transaction, so no statement runs long enough
-   * to hit a timeout regardless of how many rows are purged, and writes
-   * interleave between batches.
+   * The id set is captured into `log_purge_ids` when deletion starts and
+   * drained batch by batch — each batch is one short atomic statement, so
+   * nothing runs long enough to hit a timeout, progress is exact, and a
+   * restart resumes from the surviving rows (see {@link sweepPurgeJobs}).
+   * On completion the job row is deleted; the caller never sees log ids,
+   * only the job id and aggregate counts.
    */
   async purge(until: Date, options?: PurgeOptions): Promise<Result<PurgeJob, PurgeError>> {
     const threshold = options?.confirmationThreshold ?? this._purgeThreshold;
@@ -907,7 +992,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
       const totalCount = counts.logs + counts.attrs;
       const requiresConfirmation = totalCount >= threshold && totalCount > 0;
 
-      const job: PurgeJob & { _batchSize: number } = {
+      const job: InternalPurgeJob = {
         id: generatePurgeId(),
         until: until.toISOString(),
         status:
@@ -920,8 +1005,30 @@ export class PostgresAdapter implements QueryableLogAdapter {
         deletedAttrs: 0,
         createdAt: new Date().toISOString(),
         _batchSize: batchSize,
+        _idsCaptured: false,
       };
-      if (totalCount === 0) job.finishedAt = job.createdAt;
+      if (totalCount === 0) {
+        // Nothing to do — a memory-only completed snapshot, no row.
+        job.finishedAt = job.createdAt;
+        this._storePurgeJob(job);
+        return { ok: true, val: snapshotPurgeJob(job) };
+      }
+
+      await this._semaphore.run(() =>
+        this._db
+          .insertInto("log_purge_job")
+          .values({
+            purge_id: job.id,
+            until_ts: until,
+            status: job.status,
+            log_count: counts.logs,
+            attr_count: counts.attrs,
+            batch_size: batchSize,
+            requires_confirmation: requiresConfirmation,
+            created_at: new Date(job.createdAt),
+          })
+          .execute(),
+      );
       this._storePurgeJob(job);
 
       if (job.status === "running") this._startPurge(job);
@@ -934,28 +1041,131 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   /**
    * Confirm an `awaiting-confirmation` purge, starting its background
-   * deletion. For a job in any other state this is a no-op that returns the
+   * deletion. Works across processes — any instance holding the job id can
+   * confirm. For a job in any other state this is a no-op that returns the
    * current snapshot, so it can double as a check-in.
    */
   async confirmPurge(id: string): Promise<Result<PurgeJob, PurgeError>> {
-    const job = this._purgeJobs.get(id);
-    if (!job) {
+    try {
+      const mem = this._purgeJobs.get(id);
+      if (mem && mem.status === "awaiting-confirmation") {
+        await this._semaphore.run(() =>
+          this._db
+            .updateTable("log_purge_job")
+            .set({ status: "running" })
+            .where("purge_id", "=", id)
+            .where("status", "=", "awaiting-confirmation")
+            .execute(),
+        );
+        mem.status = "running";
+        this._startPurge(mem);
+        return { ok: true, val: snapshotPurgeJob(mem) };
+      }
+
+      // Cross-process path: the job was planned by another instance.
+      const row = await this._selectPurgeRow(id);
+      if (row) {
+        if (row.status === "awaiting-confirmation") {
+          const claimed = await this._semaphore.run(() =>
+            this._db
+              .updateTable("log_purge_job")
+              .set({ status: "running" })
+              .where("purge_id", "=", id)
+              .where("status", "=", "awaiting-confirmation")
+              .executeTakeFirst(),
+          );
+          if (Number(claimed.numUpdatedRows ?? 0) > 0) {
+            const job = purgeRowToInternal(row);
+            job.status = "running";
+            this._storePurgeJob(job);
+            this._startPurge(job);
+            return { ok: true, val: snapshotPurgeJob(job) };
+          }
+        }
+        return { ok: true, val: purgeRowToJob(row) };
+      }
+
+      if (mem) return { ok: true, val: snapshotPurgeJob(mem) };
       return { ok: false, err: new Err("unknown purge id").addCause(`no purge job ${id}`) };
+    } catch (err) {
+      const cause = err instanceof Error ? err : String(err);
+      return { ok: false, err: new Err("failed to purge").addCause(cause) };
     }
-    if (job.status === "awaiting-confirmation") {
-      job.status = "running";
-      this._startPurge(job);
-    }
-    return { ok: true, val: snapshotPurgeJob(job) };
   }
 
-  /** Current snapshot of a purge job — status, planned counts, and progress. */
+  /**
+   * Current snapshot of a purge job. The `log_purge_job` row is authoritative
+   * while the job exists; after completion the row is gone, so a terminal
+   * snapshot is served from this instance's memory. (An instance that never
+   * saw the job therefore reports a *finished* job as `unknown purge id`.)
+   */
   async purgeStatus(id: string): Promise<Result<PurgeJob, PurgeError>> {
-    const job = this._purgeJobs.get(id);
-    if (!job) {
-      return { ok: false, err: new Err("unknown purge id").addCause(`no purge job ${id}`) };
+    try {
+      const row = await this._selectPurgeRow(id);
+      if (row) return { ok: true, val: purgeRowToJob(row) };
+    } catch {
+      // table missing / transient DB error — fall through to memory
     }
-    return { ok: true, val: snapshotPurgeJob(job) };
+    const mem = this._purgeJobs.get(id);
+    if (mem) return { ok: true, val: snapshotPurgeJob(mem) };
+    return { ok: false, err: new Err("unknown purge id").addCause(`no purge job ${id}`) };
+  }
+
+  /**
+   * Resume orphaned purges: `running` jobs whose processing lock is absent or
+   * past its TTL (their instance died or was closed mid-run). Claims each with
+   * this instance's lock and continues draining `log_purge_ids` from where the
+   * previous owner stopped. Runs automatically on an interval (see
+   * `purgeSweepIntervalMs`); safe to call manually. Returns the number of jobs
+   * resumed; quietly returns 0 when the purge tables don't exist yet.
+   */
+  async sweepPurgeJobs(): Promise<number> {
+    if (this._closing) return 0;
+    try {
+      const candidates = await this._semaphore.run(() =>
+        this._db
+          .selectFrom("log_purge_job")
+          .selectAll()
+          .where("status", "=", "running")
+          .where((eb) =>
+            eb.or([
+              eb("locked_by", "is", null),
+              eb("lock_expires_at", "<", sql<Date>`now()`),
+            ]),
+          )
+          .limit(10)
+          .execute(),
+      );
+      let resumed = 0;
+      for (const row of candidates as PurgeJobRow[]) {
+        const claimed = await this._semaphore.run(() =>
+          this._db
+            .updateTable("log_purge_job")
+            .set({
+              locked_by: this._instanceId,
+              lock_expires_at: sql`now() + (${this._purgeLockTtlMs} * interval '1 millisecond')`,
+            })
+            .where("purge_id", "=", row.purge_id)
+            .where("status", "=", "running")
+            .where((eb) =>
+              eb.or([
+                eb("locked_by", "is", null),
+                eb("lock_expires_at", "<", sql<Date>`now()`),
+              ]),
+            )
+            .executeTakeFirst(),
+        );
+        if (Number(claimed.numUpdatedRows ?? 0) > 0) {
+          const job = purgeRowToInternal(row);
+          this._storePurgeJob(job);
+          this._startPurge(job, /* alreadyClaimed */ true);
+          resumed++;
+        }
+      }
+      return resumed;
+    } catch {
+      return 0; // purge tables not migrated yet, or transient DB error
+    }
   }
 
   /** Count the rows a purge of `until` would delete (logs, and attr + blob rows). */
@@ -973,8 +1183,20 @@ export class PostgresAdapter implements QueryableLogAdapter {
     return { logs, attrs };
   }
 
-  /** Store a job, pruning the oldest finished jobs past the retention cap. */
-  private _storePurgeJob(job: PurgeJob & { _batchSize: number }): void {
+  /** The job's `log_purge_job` row, or null. */
+  private async _selectPurgeRow(id: string): Promise<PurgeJobRow | null> {
+    const row = await this._semaphore.run(() =>
+      this._db
+        .selectFrom("log_purge_job")
+        .selectAll()
+        .where("purge_id", "=", id)
+        .executeTakeFirst(),
+    );
+    return (row as PurgeJobRow | undefined) ?? null;
+  }
+
+  /** Store a snapshot, pruning the oldest finished jobs past the retention cap. */
+  private _storePurgeJob(job: InternalPurgeJob): void {
     if (this._purgeJobs.size >= this.MAX_PURGE_JOBS) {
       for (const [id, existing] of this._purgeJobs) {
         if (existing.status !== "running" && existing.status !== "awaiting-confirmation") {
@@ -987,83 +1209,165 @@ export class PostgresAdapter implements QueryableLogAdapter {
   }
 
   /** Kick off the background batched deletion for a running job. */
-  private _startPurge(job: PurgeJob & { _batchSize: number }): void {
-    job.startedAt = new Date().toISOString();
-    const run = this._runPurge(job).finally(() => this._activePurges.delete(run));
+  private _startPurge(job: InternalPurgeJob, alreadyClaimed = false): void {
+    job.startedAt = job.startedAt ?? new Date().toISOString();
+    const run = this._runPurge(job, alreadyClaimed).finally(() => this._activePurges.delete(run));
     this._activePurges.add(run);
   }
 
-  /** The background loop: one short transaction per batch until done, closed, or failed. */
-  private async _runPurge(job: PurgeJob & { _batchSize: number }): Promise<void> {
+  /**
+   * The background loop: claim the lock, capture the id set if this job never
+   * got that far, then drain one short atomic batch statement at a time.
+   * Completion deletes the job row; close() exits between batches leaving the
+   * row `running` (lock released) so a sweep on any instance resumes it.
+   */
+  private async _runPurge(job: InternalPurgeJob, alreadyClaimed: boolean): Promise<void> {
     const until = new Date(job.until);
     try {
+      if (!alreadyClaimed) {
+        const claimed = await this._semaphore.run(() =>
+          this._db
+            .updateTable("log_purge_job")
+            .set({
+              locked_by: this._instanceId,
+              lock_expires_at: sql`now() + (${this._purgeLockTtlMs} * interval '1 millisecond')`,
+            })
+            .where("purge_id", "=", job.id)
+            .where("status", "=", "running")
+            .where((eb) =>
+              eb.or([
+                eb("locked_by", "is", null),
+                eb("locked_by", "=", this._instanceId),
+                eb("lock_expires_at", "<", sql<Date>`now()`),
+              ]),
+            )
+            .executeTakeFirst(),
+        );
+        if (Number(claimed.numUpdatedRows ?? 0) === 0) return; // another instance owns it
+      }
+
+      if (!job._idsCaptured) {
+        // Snapshot the id set. ON CONFLICT keeps this idempotent for a job
+        // that crashed between capture and the flag update.
+        await this._semaphore.run(() =>
+          sql`
+            INSERT INTO log_purge_ids (purge_id, log_id)
+            SELECT ${job.id}, log_id FROM logs
+            WHERE logged_timestamp <= ${until}
+            ON CONFLICT DO NOTHING
+          `.execute(this._db),
+        );
+        await this._semaphore.run(() =>
+          this._db
+            .updateTable("log_purge_job")
+            .set({ ids_captured: true })
+            .where("purge_id", "=", job.id)
+            .execute(),
+        );
+        job._idsCaptured = true;
+      }
+
       for (;;) {
         if (this._closing) {
-          job.status = "aborted";
+          // Leave the row `running` and release the lock — resumable by sweep.
+          await this._releasePurgeLock(job.id);
+          return;
+        }
+        const batch = await this._semaphore.run(() => this._purgeBatch(job.id, job._batchSize));
+        job.deletedLogs += batch.logs;
+        job.deletedAttrs += batch.attrs;
+
+        if (batch.ids < job._batchSize) {
+          // Drained — log_purge_ids is empty, so the job row goes too.
+          await this._semaphore.run(() =>
+            this._db.deleteFrom("log_purge_job").where("purge_id", "=", job.id).execute(),
+          );
+          job.status = "completed";
           job.finishedAt = new Date().toISOString();
           return;
         }
-        const batch = await this._semaphore.run(() => this._purgeBatch(until, job._batchSize));
-        job.deletedLogs += batch.logs;
-        job.deletedAttrs += batch.attrs;
-        if (batch.logs < job._batchSize) break; // final (possibly empty) batch
+
+        // Progress + heartbeat (extends the lock TTL).
+        await this._semaphore.run(() =>
+          this._db
+            .updateTable("log_purge_job")
+            .set({
+              deleted_logs: job.deletedLogs,
+              deleted_attrs: job.deletedAttrs,
+              locked_by: this._instanceId,
+              lock_expires_at: sql`now() + (${this._purgeLockTtlMs} * interval '1 millisecond')`,
+            })
+            .where("purge_id", "=", job.id)
+            .execute(),
+        );
       }
-      job.status = "completed";
-      job.finishedAt = new Date().toISOString();
     } catch (err) {
       job.status = "failed";
       job.error = err instanceof Error ? err.message : String(err);
       job.finishedAt = new Date().toISOString();
+      try {
+        await this._db
+          .updateTable("log_purge_job")
+          .set({ status: "failed", error: job.error, locked_by: null, lock_expires_at: null })
+          .where("purge_id", "=", job.id)
+          .execute();
+      } catch {
+        // the failure may be the DB itself — the memory snapshot still records it
+      }
     }
   }
 
-  /** Delete one bounded batch; returns the rows removed per table group. */
+  /** Release this instance's lock on a job (leaves the row resumable). */
+  private async _releasePurgeLock(id: string): Promise<void> {
+    try {
+      await this._db
+        .updateTable("log_purge_job")
+        .set({ locked_by: null, lock_expires_at: null })
+        .where("purge_id", "=", id)
+        .where("locked_by", "=", this._instanceId)
+        .execute();
+    } catch {
+      // best effort — the TTL expires the lock regardless
+    }
+  }
+
+  /**
+   * Delete one bounded batch as a single atomic statement: the `batch` CTE is
+   * evaluated once, so every DELETE targets exactly the same ids, and the
+   * drained ids leave `log_purge_ids` in the same statement. No temp table,
+   * no explicit transaction.
+   */
   private async _purgeBatch(
-    until: Date,
+    purgeId: string,
     batchSize: number,
-  ): Promise<{ logs: number; attrs: number }> {
-    return this._db.transaction().execute(async (tx) => {
-      // Capture the bounded set of IDs once so all three DELETEs target
-      // exactly the same rows regardless of concurrent inserts.
-      await sql`
-        CREATE TEMP TABLE _purge_ids ON COMMIT DROP AS
-          SELECT log_id FROM logs
-          WHERE logged_timestamp <= ${until}
-          LIMIT ${sql.lit(batchSize)}
-      `.execute(tx);
-
-      const countDeleted = async (query: ReturnType<typeof sql>): Promise<number> => {
-        const res = await query.execute(tx);
-        const n = (res.rows[0] as { n?: string | number } | undefined)?.n;
-        return n != null ? Number(n) : 0;
-      };
-
-      const blobs = await countDeleted(sql`
-        WITH d AS (
-          DELETE FROM log_attr_blob
-          USING _purge_ids
-          WHERE log_attr_blob.log_id = _purge_ids.log_id
-          RETURNING 1
-        ) SELECT count(*) AS n FROM d
-      `);
-      const attrs = await countDeleted(sql`
-        WITH d AS (
-          DELETE FROM log_attr
-          USING _purge_ids
-          WHERE log_attr.log_id = _purge_ids.log_id
-          RETURNING 1
-        ) SELECT count(*) AS n FROM d
-      `);
-      const logs = await countDeleted(sql`
-        WITH d AS (
-          DELETE FROM logs
-          USING _purge_ids
-          WHERE logs.log_id = _purge_ids.log_id
-          RETURNING 1
-        ) SELECT count(*) AS n FROM d
-      `);
-      return { logs, attrs: attrs + blobs };
-    });
+  ): Promise<{ logs: number; attrs: number; ids: number }> {
+    const res = await sql<{ blobs: string | number; attrs: string | number; logs: string | number; ids: string | number }>`
+      WITH batch AS (
+        SELECT log_id FROM log_purge_ids WHERE purge_id = ${purgeId} LIMIT ${sql.lit(batchSize)}
+      ),
+      d_blob AS (
+        DELETE FROM log_attr_blob WHERE log_id IN (SELECT log_id FROM batch) RETURNING 1
+      ),
+      d_attr AS (
+        DELETE FROM log_attr WHERE log_id IN (SELECT log_id FROM batch) RETURNING 1
+      ),
+      d_logs AS (
+        DELETE FROM logs WHERE log_id IN (SELECT log_id FROM batch) RETURNING 1
+      ),
+      d_ids AS (
+        DELETE FROM log_purge_ids
+        WHERE purge_id = ${purgeId} AND log_id IN (SELECT log_id FROM batch)
+        RETURNING 1
+      )
+      SELECT
+        (SELECT count(*) FROM d_blob) AS blobs,
+        (SELECT count(*) FROM d_attr) AS attrs,
+        (SELECT count(*) FROM d_logs) AS logs,
+        (SELECT count(*) FROM d_ids) AS ids
+    `.execute(this._db);
+    const row = res.rows[0];
+    const n = (v: string | number | undefined) => (v != null ? Number(v) : 0);
+    return { logs: n(row?.logs), attrs: n(row?.attrs) + n(row?.blobs), ids: n(row?.ids) };
   }
 
   /**
@@ -1144,7 +1448,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema = current_schema()
-        AND table_name IN ('logs', 'log_attr', 'log_attr_blob')
+        AND table_name IN ('logs', 'log_attr', 'log_attr_blob', 'log_purge_job', 'log_purge_ids')
     `.execute(this._db);
     const existingTables = new Set(tables.rows.map((r) => r.table_name));
 
@@ -1168,6 +1472,11 @@ export class PostgresAdapter implements QueryableLogAdapter {
         name: "002_attr_val_name_index",
         applied: existingIndexes.has("log_attr_val_name_idx"),
       },
+      {
+        name: "003_purge_jobs",
+        applied:
+          existingTables.has("log_purge_job") && existingTables.has("log_purge_ids"),
+      },
     ];
   }
 
@@ -1179,9 +1488,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
   }
 
   /**
-   * Stops the flush timer, flushes any remaining queued records, and stops
-   * in-flight purges: each finishes its current batch, then its job is marked
-   * `aborted`.
+   * Stops the flush and sweep timers, flushes any remaining queued records,
+   * and stops in-flight purges after their current batch: each job's row is
+   * left `running` with its lock released, so a sweep — on this process after
+   * restart, or on any other instance — resumes it.
    */
   async close(): Promise<void> {
     this._closing = true;
@@ -1189,11 +1499,29 @@ export class PostgresAdapter implements QueryableLogAdapter {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
+    if (this._sweepTimer) {
+      clearInterval(this._sweepTimer);
+      this._sweepTimer = null;
+    }
     await this._flushQueue();
     await Promise.allSettled([...this._activePurges]);
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────
+
+  /** Periodically resume orphaned purge jobs (see {@link sweepPurgeJobs}). */
+  private _startSweepTimer(intervalMs: number): void {
+    this._sweepTimer = setInterval(() => {
+      void this.sweepPurgeJobs();
+    }, intervalMs);
+    if (
+      typeof this._sweepTimer === "object" &&
+      this._sweepTimer !== null &&
+      "unref" in this._sweepTimer
+    ) {
+      (this._sweepTimer as any).unref();
+    }
+  }
 
   private _startFlushTimer(): void {
     this.flushTimer = setInterval(() => {
