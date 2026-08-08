@@ -407,3 +407,25 @@ describe("PostgresAdapter e2e — path filters skip encrypted and oversized attr
     expect(await search("session.id:='123'")).toEqual([]);
   });
 });
+
+describe("PostgresAdapter e2e — query builder", () => {
+  it("executes a composed builder query against the live adapter", async () => {
+    const { where } = await import("../../logger/query-builder");
+    await seed(
+      rec("info", "hit", { session: { id: "123" }, users: ["123"] }),
+      rec("error", "level-hit", { other: "x" }),
+      rec("info", "miss", { session: { id: "999" }, users: ["999"] }),
+    );
+
+    const res = await where("session.id")
+      .eq("123")
+      .and(where("users[*]").eq("123"))
+      .or(where("$level").eq("error"))
+      .execute(adapter, { limit: 10 });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.val.map((r) => r.message).sort()).toEqual(["hit", "level-hit"]);
+    }
+  });
+});

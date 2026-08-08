@@ -74,10 +74,21 @@ export { Err } from "./types";
 export {
   parseLogQuery,
   parseLogQueryExpr,
+  parseAttrPath,
   formatToken,
   formatExpr,
   findContradictions,
   isUnsatisfiable,
   QUERY_SYNTAX_ERROR,
 } from "./logger/parseLogQuery";
-export type { LogQueryToken, LogQueryOperator, FilterExpr } from "./logger/parseLogQuery";
+export type {
+  LogQueryToken,
+  LogQueryOperator,
+  FilterExpr,
+  AttrPath,
+  PathSegment,
+} from "./logger/parseLogQuery";
+
+// Programmatic query builder
+export { where, literal, QueryBuilder, WhereClause } from "./logger/query-builder";
+export type { FilterValue, ExecuteOptions } from "./logger/query-builder";
