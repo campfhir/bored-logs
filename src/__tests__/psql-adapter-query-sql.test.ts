@@ -388,3 +388,187 @@ describe("PostgresAdapter.query — built-in timestamp/level fields (not attribu
     expect(dateParamCount(q)).toBe(4); // window ×2 + day-range ×2, negated
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nested attribute paths — compiled SQL shape.
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter.query — nested attribute paths", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+
+  it("compiles a concrete path with the CASE guard and #>> extraction", async () => {
+    const q = await mainQuery("session.id:='123'");
+    // val_name matches the BASE attribute, not the full dotted key
+    expect(q.parameters).toContain("session");
+    expect(q.parameters).not.toContain("session.id");
+    // json-only guard, encrypted excluded, evaluated inside CASE
+    expect(q.sql).toMatch(/case when/i);
+    expect(q.sql).toMatch(/"val_type" = 'json'/);
+    expect(q.sql).toMatch(/"encrypted" = false/);
+    expect(q.sql).toMatch(/"val" is not null/);
+    // text extraction with a bound path array
+    expect(q.sql).toMatch(/#>>/);
+    expect(q.parameters).toContainEqual(["id"]);
+    expect(q.parameters).toContain("123");
+  });
+
+  it("reuses the guarded numeric cast on an extracted concrete path", async () => {
+    const q = await mainQuery("cart.total:>'100'");
+    expect(q.sql).toMatch(/#>>/);
+    expect(q.sql).toMatch(/::numeric > /);
+    expect(q.sql).toMatch(/~ '\^-\?\[0-9\]/); // numeric regex guard present
+  });
+
+  it("compiles array-index segments into the path array", async () => {
+    const q = await mainQuery("users[0]:='123'");
+    expect(q.parameters).toContain("users");
+    expect(q.parameters).toContainEqual(["0"]);
+  });
+
+  it("compiles a wildcard path to jsonb_path_exists with a BOUND jsonpath", async () => {
+    const q = await mainQuery("users[*]:='123'");
+    expect(q.sql).toMatch(/jsonb_path_exists/);
+    // the jsonpath itself must be a parameter, never inlined into the SQL
+    expect(q.sql).not.toContain("$[*]");
+    const jsonpath = q.parameters.find(
+      (p): p is string => typeof p === "string" && p.includes("[*]"),
+    );
+    expect(jsonpath).toBeDefined();
+    expect(jsonpath).toContain("?");
+    // equality on a numeric-looking value matches string AND number forms
+    expect(jsonpath).toContain("@ == $vs");
+    expect(jsonpath).toContain("@ == $vn");
+    // vars are bound as their own jsonb parameter
+    const vars = q.parameters.find(
+      (p): p is string => typeof p === "string" && p.includes('"vs"'),
+    );
+    expect(vars).toBeDefined();
+    expect(JSON.parse(vars!)).toEqual({ vs: "123", vn: 123 });
+  });
+
+  it("compiles wildcard equality on a non-numeric value with a single string var", async () => {
+    const q = await mainQuery("cart.items[*].sku:='A-1'");
+    const jsonpath = q.parameters.find(
+      (p): p is string => typeof p === "string" && p.includes("[*]"),
+    );
+    expect(jsonpath).toContain('$."items"[*]."sku"');
+    expect(jsonpath).toContain("@ == $vs");
+    expect(jsonpath).not.toContain("$vn");
+  });
+
+  it("regex-escapes the contains pattern (value with quote and regex chars)", async () => {
+    const parsed = parseLogQueryExpr(String.raw`users[*]:'a".*b'`);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql))!;
+    const jsonpath = q.parameters.find(
+      (p): p is string => typeof p === "string" && p.includes("like_regex"),
+    );
+    expect(jsonpath).toBeDefined();
+    // the regex metacharacters are escaped; the quote is JSON-escaped, so the
+    // jsonpath string stays well-formed
+    expect(jsonpath).toContain("\\.");
+    expect(jsonpath).toContain("\\*");
+    expect(() => JSON.parse(`{"p": "${"x"}"}`)).not.toThrow();
+    // and nothing from the value leaks into the SQL text itself
+    expect(q.sql).not.toContain("a\".*b");
+  });
+
+  it("negates a path filter as NOT EXISTS", async () => {
+    const q = await mainQuery("session.id:!='123'");
+    expect(q.sql).toMatch(/not exists \(select/i);
+  });
+
+  it("compiles a LITERAL quoted key to a flat val_name lookup", async () => {
+    const q = await mainQuery("'session.id':='123'");
+    expect(q.parameters).toContain("session.id");
+    expect(q.sql).not.toMatch(/#>>|jsonb_path_exists/);
+  });
+
+  it("compiles a malformed path as a flat key (backward compatible)", async () => {
+    const q = await mainQuery("weird[key:='x'");
+    expect(q.parameters).toContain("weird[key");
+    expect(q.sql).not.toMatch(/#>>|jsonb_path_exists/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Null literals — compiled SQL shape.
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter.query — null literals", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+
+  it("compiles a flat null literal to a val_type = 'null' check", async () => {
+    const q = await mainQuery("reason:=null");
+    expect(q.sql).toMatch(/"val_type" = 'null'/);
+    // no value comparison — the row's existence with type null IS the match
+    expect(q.sql).not.toMatch(/"val" = \$/);
+  });
+
+  it("negates a flat null literal as NOT EXISTS", async () => {
+    const q = await mainQuery("reason:!=null");
+    expect(q.sql).toMatch(/not exists \(select/i);
+    expect(q.sql).toMatch(/"val_type" = 'null'/);
+  });
+
+  it("compiles a QUOTED 'null' as a plain string comparison", async () => {
+    const q = await mainQuery("reason:='null'");
+    expect(q.sql).not.toMatch(/"val_type" = 'null'/);
+    expect(q.parameters).toContain("null");
+  });
+
+  it("compiles a concrete-path null literal via jsonb #> = 'null'::jsonb", async () => {
+    const q = await mainQuery("session.id:=null");
+    expect(q.sql).toMatch(/#>(?!>)/); // jsonb extraction, not text
+    expect(q.sql).toMatch(/'null'::jsonb/);
+  });
+
+  it("compiles a wildcard null literal via @ == null in the bound jsonpath", async () => {
+    const q = await mainQuery("users[*]:=null");
+    const jsonpath = q.parameters.find(
+      (p): p is string => typeof p === "string" && p.includes("[*]"),
+    );
+    expect(jsonpath).toContain("@ == null");
+  });
+});

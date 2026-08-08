@@ -25,7 +25,8 @@ import type {
   DecryptFn,
   AdapterWarning,
 } from "../../logger/adapter";
-import type { FilterExpr, LogQueryToken } from "../../logger/parseLogQuery";
+import type { AttrPath, FilterExpr, LogQueryToken, PathSegment } from "../../logger/parseLogQuery";
+import { parseAttrPath } from "../../logger/parseLogQuery";
 import { LOG_LEVELS } from "../../logger/adapter";
 import { isSecure, isRedacted, REDACTED_PLACEHOLDER } from "../../logger/template";
 import type {
@@ -35,6 +36,7 @@ import type {
   Updateable,
   ExpressionBuilder,
   Expression,
+  RawBuilder,
   SqlBool,
 } from "kysely";
 import type { Result } from "../../types";
@@ -259,14 +261,19 @@ function parseDateValue(value: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** Value predicate inside a log_attr EXISTS subquery. */
-function attrValuePredicate(
+/**
+ * Operator predicate against an arbitrary text-valued SQL expression. Shared
+ * by the flat-attribute path (`log_attr.val`) and concrete JSON paths (the
+ * `#>>`-extracted text), so both compare with identical semantics.
+ */
+function textValuePredicate(
   eb: ExpressionBuilder<any, any>,
+  ref: RawBuilder<any>,
   token: LogQueryToken,
 ): Expression<SqlBool> {
   const { operator, value } = token;
-  if (operator === "contains") return eb("log_attr.val", "like", `%${value}%`);
-  if (operator === "=") return eb("log_attr.val", "=", value);
+  if (operator === "contains") return sql<boolean>`${ref} like ${`%${value}%`}`;
+  if (operator === "=") return sql<boolean>`${ref} = ${value}`;
 
   // Comparison operator. Guard the numeric cast with a regex so non-numeric
   // values are excluded rather than raising a cast error.
@@ -274,8 +281,8 @@ function attrValuePredicate(
   if (isNumeric) {
     const num = parseFloat(value);
     return eb.and([
-      sql<boolean>`log_attr.val ~ '^-?[0-9]+(\\.[0-9]+)?$'`,
-      sql<boolean>`log_attr.val::numeric ${sql.raw(operator)} ${sql.lit(num)}::numeric`,
+      sql<boolean>`${ref} ~ '^-?[0-9]+(\\.[0-9]+)?$'`,
+      sql<boolean>`${ref}::numeric ${sql.raw(operator)} ${sql.lit(num)}::numeric`,
     ]);
   }
   // Date/time values: compare chronologically via a guarded timestamptz cast so
@@ -284,11 +291,139 @@ function attrValuePredicate(
   // same attribute name from raising a cast error.
   if (ISO_DATE_RE.test(value)) {
     return eb.and([
-      sql<boolean>`log_attr.val ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$'`,
-      sql<boolean>`log_attr.val::timestamptz ${sql.raw(operator)} ${value}::timestamptz`,
+      sql<boolean>`${ref} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$'`,
+      sql<boolean>`${ref}::timestamptz ${sql.raw(operator)} ${value}::timestamptz`,
     ]);
   }
-  return eb("log_attr.val", operator, value);
+  return sql<boolean>`${ref} ${sql.raw(operator)} ${value}`;
+}
+
+/** Value predicate inside a log_attr EXISTS subquery. */
+function attrValuePredicate(
+  eb: ExpressionBuilder<any, any>,
+  token: LogQueryToken,
+): Expression<SqlBool> {
+  // A flat null literal matches by TYPE — that's how `serializeAttrValue`
+  // stores a null attribute (val_type='null', val NULL).
+  if (token.nullValue) return sql<boolean>`${sql.ref("log_attr.val_type")} = 'null'`;
+  return textValuePredicate(eb, sql.ref("log_attr.val"), token);
+}
+
+// ---------------------------------------------------------------------------
+// Nested attribute paths — `session.id`, `users[*]`, `cart.items[*].sku`.
+//
+// The stored shape is one log_attr row per top-level attribute with
+// val = JSON.stringify(value), val_type = 'json'. A path leaf keeps the same
+// correlated EXISTS shell (val_name matches the BASE attribute) and adds a
+// CASE-guarded JSON predicate. CASE guarantees evaluation order, so the
+// ::jsonb cast never runs on ciphertext (encrypted), NULL (binary-routed
+// oversized values), or non-JSON rows. Consequences: encrypted and oversized
+// attributes never match a path filter — and therefore DO match its negation.
+// ---------------------------------------------------------------------------
+
+const NUMERIC_RE = /^-?[0-9]+(\.[0-9]+)?$/;
+
+/** Render path segments as a jsonpath spine: `$."items"[*]."sku"`. Member names are JSON-escaped. */
+function jsonPathSpine(segments: PathSegment[]): string {
+  let out = "$";
+  for (const seg of segments) {
+    if (seg.type === "member") out += `.${JSON.stringify(seg.name)}`;
+    else if (seg.type === "index") out += `[${seg.index}]`;
+    else out += "[*]";
+  }
+  return out;
+}
+
+/** Escape a value for use inside a jsonpath `like_regex` pattern. */
+function escapeJsonPathRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The jsonpath filter (`? (...)`) and its bound vars for a wildcard-path leaf.
+ * Values reach the predicate via jsonpath vars where the grammar allows;
+ * `like_regex` and `.datetime()` require literals, so those are regex- and
+ * JSON-escaped into the path string — which is itself a bound SQL parameter,
+ * so there is no SQL-injection surface either way.
+ */
+function jsonPathFilter(token: LogQueryToken): { filter: string; vars: Record<string, unknown> } {
+  const { operator, value } = token;
+  if (token.nullValue) return { filter: "@ == null", vars: {} };
+
+  if (operator === "=") {
+    // A query value is always a string; match the JSON string AND the typed
+    // form so `users[*]:='123'` finds both "123" and 123 (mirroring how a
+    // concrete path's #>> text extraction erases the distinction).
+    if (NUMERIC_RE.test(value)) {
+      return { filter: "@ == $vs || @ == $vn", vars: { vs: value, vn: parseFloat(value) } };
+    }
+    if (value === "true" || value === "false") {
+      return { filter: "@ == $vs || @ == $vb", vars: { vs: value, vb: value === "true" } };
+    }
+    return { filter: "@ == $vs", vars: { vs: value } };
+  }
+
+  if (operator === "contains") {
+    // Substring semantics on string elements only (like_regex is string-typed).
+    const re = escapeJsonPathRegex(value);
+    return { filter: `@.type() == "string" && @ like_regex ${JSON.stringify(re)}`, vars: {} };
+  }
+
+  // Range comparison. Cover JSON numbers AND string-encoded numbers, matching
+  // the flat predicate's guarded ::numeric cast semantics.
+  if (NUMERIC_RE.test(value)) {
+    return {
+      filter:
+        `(@.type() == "number" && @ ${operator} $vn) || ` +
+        `(@.type() == "string" && @ like_regex "^-?[0-9]+(\\\\.[0-9]+)?$" && @.double() ${operator} $vn)`,
+      vars: { vn: parseFloat(value) },
+    };
+  }
+  // Chronological comparison for ISO date values. Stored JSON dates are
+  // JSON.stringify(Date) output (full ISO-Z), so both sides parse; rows whose
+  // strings don't parse are skipped by the `silent` flag.
+  if (ISO_DATE_RE.test(value)) {
+    const iso = new Date(value).toISOString();
+    return {
+      filter: `@.type() == "string" && @.datetime() ${operator} ${JSON.stringify(iso)}.datetime()`,
+      vars: {},
+    };
+  }
+  return { filter: `@.type() == "string" && @ ${operator} $vs`, vars: { vs: value } };
+}
+
+/** The CASE-guarded JSON predicate for a path leaf (see section comment for why CASE). */
+function pathPredicate(
+  eb: ExpressionBuilder<any, any>,
+  path: AttrPath,
+  token: LogQueryToken,
+): Expression<SqlBool> {
+  const hasWildcard = path.segments.some((s) => s.type === "wildcard");
+
+  let inner: Expression<SqlBool>;
+  if (hasWildcard) {
+    const { filter, vars } = jsonPathFilter(token);
+    const jsonpath = `${jsonPathSpine(path.segments)} ? (${filter})`;
+    inner = sql<boolean>`jsonb_path_exists(${sql.ref("log_attr.val")}::jsonb, ${jsonpath}::jsonpath, ${JSON.stringify(vars)}::jsonb, true)`;
+  } else {
+    // Concrete path. Segments as a bound text[] — integer indexes as strings
+    // (#> / #>> index arrays with them).
+    const arr = path.segments.map((s) =>
+      s.type === "member" ? s.name : String((s as { index: number }).index),
+    );
+    if (token.nullValue) {
+      // #> (jsonb, not text) distinguishes an explicit JSON null from a
+      // missing path — #>> renders both as SQL NULL.
+      inner = sql<boolean>`${sql.ref("log_attr.val")}::jsonb #> ${arr}::text[] = 'null'::jsonb`;
+    } else {
+      // Extract text and reuse the exact flat-value operator semantics
+      // (#>> renders JSON string "123" and number 123 identically).
+      const extracted = sql`(${sql.ref("log_attr.val")}::jsonb #>> ${arr}::text[])`;
+      inner = textValuePredicate(eb, extracted, token);
+    }
+  }
+
+  return sql<boolean>`case when ${sql.ref("log_attr.val_type")} = 'json' and ${sql.ref("log_attr.encrypted")} = false and ${sql.ref("log_attr.val")} is not null then ${inner} else false end`;
 }
 
 /** A `timestamp:` leaf → a comparison against the real logs.logged_timestamp column. */
@@ -344,13 +479,16 @@ function buildLeaf(
   }
   if (isTimestampKey(token.key)) return buildTimestampLeaf(eb, token);
   if (isLevelKey(token.key)) return buildLevelLeaf(eb, token);
+  // A bare dotted/bracketed key is a path into a JSON attribute; a quoted key
+  // (literalKey) — or a malformed path — stays a flat val_name lookup.
+  const path = token.literalKey ? null : parseAttrPath(token.key);
   const exists = eb.exists(
     eb
       .selectFrom("log_attr")
       .select(sql`1`.as("one"))
       .whereRef("log_attr.log_id", "=", "logs.log_id")
-      .where("log_attr.val_name", "=", token.key)
-      .where((sub) => attrValuePredicate(sub, token)),
+      .where("log_attr.val_name", "=", path ? path.base : token.key)
+      .where((sub) => (path ? pathPredicate(sub, path, token) : attrValuePredicate(sub, token))),
   );
   return token.negated ? eb.not(exists) : exists;
 }
