@@ -327,14 +327,12 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
     // dotted/bracketed key means a path. The flag is only set when it is
     // load-bearing, so plain quoted keys keep their existing token shape.
     if (keyWasQuoted && /[.[]/.test(key)) token.literalKey = true;
-    // A BARE null/NULL with an equality-ish operator is the null literal;
-    // a quoted 'null' stays the string. Range comparisons keep string
-    // semantics — ordering against null is meaningless.
-    if (
-      !valueWasQuoted &&
-      (value === "null" || value === "NULL") &&
-      (operator === "=" || operator === "contains")
-    ) {
+    // A BARE null/NULL is the null literal; a quoted 'null' stays the string.
+    // The flag is set for every operator so the expression parser can reject
+    // ordered forms (`key:>null`) as a syntax error — ordering against null
+    // is meaningless, and silently comparing against the string "null" would
+    // be a query that looks valid but matches nothing.
+    if (!valueWasQuoted && (value === "null" || value === "NULL")) {
       token.value = "null";
       token.nullValue = true;
     }
@@ -358,6 +356,15 @@ function validateBuiltinLeaf(token: LogQueryToken): ParseError | null {
     return syntaxError(
       `invalid timestamp value ${JSON.stringify(token.value)} — ` +
         `expected an ISO/RFC date or date-time (e.g. '2003-01-02' or '2003-01-02T09:30:00Z')`,
+    );
+  }
+  // The null literal supports presence checks only: `:=`/`:` (and their
+  // negations). Ordering against null is meaningless; quote 'null' to compare
+  // against the string.
+  if (token.nullValue && token.operator !== "=" && token.operator !== "contains") {
+    return syntaxError(
+      `cannot order against the null literal (\`${token.key}:${token.operator}null\`) — ` +
+        `use :=null / :!=null, or quote 'null' to compare the string`,
     );
   }
   return null;

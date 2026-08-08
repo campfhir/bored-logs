@@ -561,8 +561,14 @@ describe("null literals", () => {
     });
   });
 
-  it("keeps string semantics for range operators", () => {
+  it("tags a bare null on range operators too (the expr parser rejects those)", () => {
+    // The flat tokenizer has no error channel, so it tags the token; the
+    // ordered form is rejected as a syntax error by parseLogQueryExpr.
     expect(parseLogQuery("reason:>null")[0]).toEqual({
+      key: "reason", operator: ">", value: "null", negated: undefined, nullValue: true,
+    });
+    // Quoted 'null' keeps string-comparison semantics on every operator.
+    expect(parseLogQuery("reason:>'null'")[0]).toEqual({
       key: "reason", operator: ">", value: "null", negated: undefined,
     });
   });

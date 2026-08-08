@@ -409,3 +409,36 @@ describe("parseLogQueryExpr — path keys", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Null literals — ordering against null is rejected as a syntax error.
+// ---------------------------------------------------------------------------
+
+describe("parseLogQueryExpr — null literal operator validation", () => {
+  const accepted = ["session:=null", "session:!=null", "session:null", "session:!null"];
+  for (const query of accepted) {
+    it(`accepts ${JSON.stringify(query)}`, () => {
+      expect(parseLogQueryExpr(query).ok).toBe(true);
+    });
+  }
+
+  const rejected = ["session:>null", "session:>=null", "session:<null", "session:<=NULL"];
+  for (const query of rejected) {
+    it(`rejects ${JSON.stringify(query)} — null cannot be ordered`, () => {
+      const r = parseLogQueryExpr(query);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.err.message).toBe(QUERY_SYNTAX_ERROR);
+        expect(r.err.cause?.message).toMatch(/null/i);
+      }
+    });
+  }
+
+  it("still accepts a QUOTED 'null' with range operators (string comparison)", () => {
+    expect(parseLogQueryExpr("session:>'null'").ok).toBe(true);
+  });
+
+  it("rejects a range-null nested inside groups and ORs", () => {
+    expect(parseLogQueryExpr("a:'1' (session:>null || b:'2')").ok).toBe(false);
+  });
+});

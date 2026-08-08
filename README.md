@@ -926,9 +926,12 @@ An **unquoted** `null` / `NULL` with `:=` or `:` matches the null literal; a **q
 ```
 reason:=null              # attribute stored as null
 reason:!=null             # attribute absent, non-null, or anything else
+reason:null               # accepted shorthand for :=null (reason:!null likewise)
 session.id:=null          # explicit JSON null at a path (missing keys do NOT match)
 reason:='null'            # the four-character string "null"
 ```
+
+Only presence checks are valid — ordering against null is meaningless, so `reason:>null` (and `>=`, `<`, `<=`) is a **syntax error** rather than a query that silently matches nothing. Quote it (`reason:>'null'`) to lexicographically compare the string.
 
 ```typescript
 import { parseLogQueryExpr, formatExpr, isUnsatisfiable } from "@campfhir/bored-logs";
