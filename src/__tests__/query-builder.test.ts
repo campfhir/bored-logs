@@ -182,3 +182,26 @@ describe("execute()", () => {
     if (!res.ok) expect(res.err.message).toBe("failed to query");
   });
 });
+
+describe("::string cast", () => {
+  it("adds the cast via the options argument on comparison methods", () => {
+    expect(where("count").gt("100", { cast: "string" }).build()).toEqual(
+      q(f("count", ">", "100", { cast: "string" })),
+    );
+    expect(where("count").lte(9, { cast: "string" }).build()).toEqual(
+      q(f("count", "<=", "9", { cast: "string" })),
+    );
+  });
+
+  it("round-trips through toQueryString", () => {
+    const b = where("count").gt("100", { cast: "string" });
+    expect(b.toQueryString()).toBe("count:>'100'::string");
+    const reparsed = parseLogQueryExpr(b.toQueryString());
+    expect(reparsed.ok).toBe(true);
+    if (reparsed.ok) expect(reparsed.val).toEqual(b.build());
+  });
+
+  it("rejects the cast on built-in $ keys", () => {
+    expect(() => where("$timestamp").gt("2003-01-02", { cast: "string" })).toThrowError(TypeError);
+  });
+});

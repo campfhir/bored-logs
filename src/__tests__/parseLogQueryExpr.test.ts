@@ -442,3 +442,27 @@ describe("parseLogQueryExpr — null literal operator validation", () => {
     expect(parseLogQueryExpr("a:'1' (session:>null || b:'2')").ok).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ::string cast in expressions.
+// ---------------------------------------------------------------------------
+
+describe("parseLogQueryExpr — ::string cast", () => {
+  it("parses inside boolean expressions and round-trips", () => {
+    const r = parseLogQueryExpr("count:>'100'::string || name:<'M'");
+    expect(r.ok).toBe(true);
+    if (r.ok && r.val) {
+      const reparsed = parseLogQueryExpr(formatExpr(r.val));
+      expect(reparsed.ok).toBe(true);
+      if (reparsed.ok) expect(reparsed.val).toEqual(r.val);
+    }
+  });
+
+  it("rejects the cast on built-in $ keys", () => {
+    for (const q of ["$timestamp:>'2003-01-02'::string", "$level:='error'::string", "$message:'x'::string"]) {
+      const r = parseLogQueryExpr(q);
+      expect(r.ok, q).toBe(false);
+      if (!r.ok) expect(r.err.cause?.message).toMatch(/::string/);
+    }
+  });
+});

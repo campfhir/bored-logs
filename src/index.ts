@@ -91,4 +91,4 @@ export type {
 
 // Programmatic query builder
 export { where, literal, QueryBuilder, WhereClause } from "./logger/query-builder";
-export type { FilterValue, ExecuteOptions } from "./logger/query-builder";
+export type { FilterValue, ExecuteOptions, CompareOptions } from "./logger/query-builder";

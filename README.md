@@ -706,6 +706,16 @@ Comparison operators (`>`, `>=`, `<`, `<=`) dispatch on the **filter value's** s
 
 The casts are regex-guarded so incompatible rows are *excluded* rather than raising errors, and the text branch is gated to string-typed values — so a stored `userId = 123` is never swept into a lexicographic comparison by `userId:<'A'` (where `'123' < 'A'` would spuriously match). There is no cross-type fallback in either direction; the same rules apply inside [nested paths](#nested-attribute-paths).
 
+**Explicit text comparison — `::string`.** Append `::string` to a *quoted* value to opt out of the type dispatch entirely: the comparison is lexicographic and number/date values are **coerced to their text form** and included (`123` compares as `'123'`, dates as their ISO string):
+
+```
+count:>'100'::string        # lexicographic — matches count = 20 ('20' > '100')
+version:<='v1.10'::string   # order version-ish strings as text
+users[*]:>'5'::string       # array elements of any type compare as text
+```
+
+The cast works on flat attributes and [nested paths](#nested-attribute-paths) alike; it is rejected on the `$` built-in keys, where the columns are genuinely typed. In the [query builder](#programmatic-query-builder): `where("count").gt("100", { cast: "string" })`.
+
 ---
 
 ## Client-side logging (`useLogger`)

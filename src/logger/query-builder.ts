@@ -39,6 +39,12 @@ export type FilterValue = string | number | boolean | Date;
 /** The options `execute()` accepts — everything `query()` takes except the filter itself. */
 export type ExecuteOptions = Omit<LogQueryOptions, "attributeFilter">;
 
+/** Options for the comparison methods (`gt`/`gte`/`lt`/`lte`). */
+export type CompareOptions = {
+  /** Force lexicographic comparison, coercing number/date values to text (`::string`). */
+  cast?: "string";
+};
+
 /** Any logger shape `execute()` can route through — satisfied by `Logger`. */
 type QueryableLogger = Pick<LoggerInstance, "queryAdapter">;
 
@@ -87,12 +93,20 @@ export class WhereClause {
     operator: LogQueryOperator,
     value: FilterValue,
     negated?: boolean,
+    opts?: CompareOptions,
   ): QueryBuilder {
     const str = coerce(value);
-    validateValue(this.key, str);
+    if (opts?.cast === "string" && this.key.startsWith("$")) {
+      throw new TypeError(
+        `[bored-logs] ::string cast is not supported on the built-in ${this.key} key — ` +
+          `it applies to attribute comparisons only`,
+      );
+    }
+    if (opts?.cast !== "string") validateValue(this.key, str);
     const token: LogQueryToken = { key: this.key, operator, value: str };
     if (negated) token.negated = true;
     if (this.literalKey) token.literalKey = true;
+    if (opts?.cast === "string") token.cast = "string";
     return new QueryBuilder({ type: "filter", filter: token });
   }
 
@@ -116,24 +130,29 @@ export class WhereClause {
     return this.token("contains", value, true);
   }
 
-  /** Greater-than (`key:>'v'`). Numeric or chronological, mirroring the grammar. */
-  gt(value: FilterValue): QueryBuilder {
-    return this.token(">", value);
+  /**
+   * Greater-than (`key:>'v'`). Numeric or chronological by value shape,
+   * mirroring the grammar; pass `{ cast: "string" }` to force lexicographic
+   * comparison, coercing number/date values to their text form
+   * (`key:>'v'::string`).
+   */
+  gt(value: FilterValue, opts?: CompareOptions): QueryBuilder {
+    return this.token(">", value, undefined, opts);
   }
 
-  /** Greater-or-equal (`key:>='v'`). */
-  gte(value: FilterValue): QueryBuilder {
-    return this.token(">=", value);
+  /** Greater-or-equal (`key:>='v'`). See {@link gt} for `{ cast: "string" }`. */
+  gte(value: FilterValue, opts?: CompareOptions): QueryBuilder {
+    return this.token(">=", value, undefined, opts);
   }
 
-  /** Less-than (`key:<'v'`). */
-  lt(value: FilterValue): QueryBuilder {
-    return this.token("<", value);
+  /** Less-than (`key:<'v'`). See {@link gt} for `{ cast: "string" }`. */
+  lt(value: FilterValue, opts?: CompareOptions): QueryBuilder {
+    return this.token("<", value, undefined, opts);
   }
 
-  /** Less-or-equal (`key:<='v'`). */
-  lte(value: FilterValue): QueryBuilder {
-    return this.token("<=", value);
+  /** Less-or-equal (`key:<='v'`). See {@link gt} for `{ cast: "string" }`. */
+  lte(value: FilterValue, opts?: CompareOptions): QueryBuilder {
+    return this.token("<=", value, undefined, opts);
   }
 
   /** Matches the null literal (`key:=null`) — a null attribute or JSON null at a path. */

@@ -591,3 +591,47 @@ describe("null literals", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// ::string cast — forces lexicographic comparison. Only valid after a QUOTED
+// value: key:>'value'::string.
+// ---------------------------------------------------------------------------
+
+describe("::string value cast", () => {
+  it("parses the cast after a single- or double-quoted value", () => {
+    expect(parseLogQuery("count:>'100'::string")[0]).toEqual({
+      key: "count", operator: ">", value: "100", negated: undefined, cast: "string",
+    });
+    expect(parseLogQuery('count:<="9"::string')[0]).toEqual({
+      key: "count", operator: "<=", value: "9", negated: undefined, cast: "string",
+    });
+  });
+
+  it("applies to equality and contains too (harmless no-op)", () => {
+    expect(parseLogQuery("k:='v'::string")[0]).toEqual({
+      key: "k", operator: "=", value: "v", negated: undefined, cast: "string",
+    });
+  });
+
+  it("does not treat ::string in a BARE value as a cast", () => {
+    expect(parseLogQuery("k:>abc::string")[0]).toEqual({
+      key: "k", operator: ">", value: "abc::string", negated: undefined,
+    });
+  });
+
+  it("does not consume a near-miss suffix", () => {
+    // 'v'::stringify → the cast does not match; the token carries no cast and
+    // the suffix is left for the (pre-existing) trailing-junk tokenization.
+    const tokens = parseLogQuery("k:>'v'::stringify");
+    expect(tokens[0]).toEqual({ key: "k", operator: ">", value: "v", negated: undefined });
+    expect(tokens[0]).not.toHaveProperty("cast");
+    expect(tokens.length).toBeGreaterThan(1); // suffix did not vanish into the value
+  });
+
+  it("formatToken renders and round-trips the cast", () => {
+    expect(formatToken({ key: "count", operator: ">", value: "100", cast: "string" }))
+      .toBe("count:>'100'::string");
+    const token = parseLogQuery("count:>'100'::string")[0];
+    expect(parseLogQuery(formatToken(token))[0]).toEqual(token);
+  });
+});

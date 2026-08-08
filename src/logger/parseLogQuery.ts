@@ -50,6 +50,13 @@ export interface LogQueryToken {
    * normalized to `"null"`.
    */
   nullValue?: boolean;
+  /**
+   * Explicit value cast — `key:>'100'::string` forces the comparison to be
+   * lexicographic even though the value looks numeric (or date-shaped). Only
+   * parsed after a QUOTED value. String-typed stored values only; rejected on
+   * the `$` built-in keys.
+   */
+  cast?: "string";
 }
 
 // ---------------------------------------------------------------------------
@@ -310,9 +317,21 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
   // Now read the value — quoted or bare word
   let value: string | null = null;
   let valueWasQuoted = false;
+  let cast: "string" | undefined;
   if (cur.i < cur.input.length && (cur.input[cur.i] === "'" || cur.input[cur.i] === '"')) {
     value = readQuotedValue(cur);
     valueWasQuoted = true;
+    // Optional `::string` cast — only after a quoted value, and only when the
+    // suffix ends at a term boundary (so `'v'::stringify` is NOT a cast).
+    const CAST = "::string";
+    if (
+      cur.input.startsWith(CAST, cur.i) &&
+      (cur.i + CAST.length >= cur.input.length ||
+        isTermStop(cur, cur.input[cur.i + CAST.length]))
+    ) {
+      cast = "string";
+      cur.i += CAST.length;
+    }
   } else {
     value = readBareWord(cur);
     if (!value) {
@@ -336,6 +355,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
       token.value = "null";
       token.nullValue = true;
     }
+    if (cast) token.cast = cast;
     return token;
   }
   // fallback
@@ -365,6 +385,15 @@ function validateBuiltinLeaf(token: LogQueryToken): ParseError | null {
     return syntaxError(
       `cannot order against the null literal (\`${token.key}:${token.operator}null\`) — ` +
         `use :=null / :!=null, or quote 'null' to compare the string`,
+    );
+  }
+  // ::string casts change how ATTRIBUTE values dispatch; the `$` built-ins are
+  // real typed columns where a lexicographic override would be a trap
+  // ($timestamp) or meaningless ($level / $message ignore the operator).
+  if (token.cast && token.key.startsWith("$")) {
+    return syntaxError(
+      `::string cast is not supported on the built-in ${token.key} key — ` +
+        `it applies to attribute comparisons only`,
     );
   }
   return null;
@@ -538,6 +567,13 @@ function isContradictoryPair(ta: LogQueryToken, tb: LogQueryToken): boolean {
   if (ta.key !== tb.key) return false;
   if (!!ta.literalKey !== !!tb.literalKey) return false;
   if (!!ta.nullValue !== !!tb.nullValue) return false;
+  if (ta.cast !== tb.cast) return false;
+  // ::string tokens order lexicographically, so the numeric/date
+  // impossible-range logic would false-positive on them ('10' < x < '9' IS
+  // lexically satisfiable). Only direct negation contradictions apply.
+  if (ta.cast) {
+    return ta.operator === tb.operator && ta.value === tb.value && !!ta.negated !== !!tb.negated;
+  }
   return (
     (ta.operator === tb.operator && ta.value === tb.value && !!ta.negated !== !!tb.negated) ||
     isImpossibleRange(ta, tb)
@@ -665,7 +701,7 @@ export function formatToken(token: LogQueryToken): string {
   // the string "null" keeps the quotes that distinguish it.
   if (token.nullValue) return `${key}${opStr}null`;
   const value = token.value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-  return `${key}${opStr}'${value}'`;
+  return `${key}${opStr}'${value}'${token.cast === "string" ? "::string" : ""}`;
 }
 
 /**

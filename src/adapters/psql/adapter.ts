@@ -284,6 +284,13 @@ function textValuePredicate(
   if (operator === "contains") return sql<boolean>`${ref} like ${`%${value}%`}`;
   if (operator === "=") return sql<boolean>`${ref} = ${value}`;
 
+  // An explicit ::string cast coerces every value to its stored text form and
+  // compares lexicographically — numbers ('123') and dates (ISO text)
+  // INCLUDED, which is the opposite of the default string-type gate below.
+  if (token.cast === "string") {
+    return sql<boolean>`${ref} ${sql.raw(operator)} ${value}`;
+  }
+
   // Comparison operator. Guard the numeric cast with a regex so non-numeric
   // values are excluded rather than raising a cast error.
   const isNumeric = /^-?[0-9]+(\.[0-9]+)?$/.test(value);
@@ -415,7 +422,14 @@ function pathPredicate(
   const hasWildcard = path.segments.some((s) => s.type === "wildcard");
 
   let inner: Expression<SqlBool>;
-  if (hasWildcard) {
+  if (hasWildcard && token.cast === "string") {
+    // ::string cast — extract every element at the path (any JSON type) and
+    // compare its TEXT form, so numbers and dates coerce instead of being
+    // type-gated. `#>> '{}'` renders any scalar as its bare text.
+    const spine = jsonPathSpine(path.segments);
+    const el = sql`(pq.el #>> '{}')`;
+    inner = sql<boolean>`exists (select 1 from jsonb_path_query(${sql.ref("log_attr.val")}::jsonb, ${spine}::jsonpath) as pq(el) where ${textValuePredicate(eb, el, token, sql<boolean>`true`)})`;
+  } else if (hasWildcard) {
     const { filter, vars } = jsonPathFilter(token);
     const jsonpath = `${jsonPathSpine(path.segments)} ? (${filter})`;
     inner = sql<boolean>`jsonb_path_exists(${sql.ref("log_attr.val")}::jsonb, ${jsonpath}::jsonpath, ${JSON.stringify(vars)}::jsonb, true)`;

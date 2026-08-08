@@ -132,3 +132,27 @@ describe("findContradictions — path and literal keys", () => {
     expect(findContradictions(tree("reason:=null reason:!='null'"))).toEqual([]);
   });
 });
+
+describe("findContradictions — ::string cast", () => {
+  const tree = (q: string) => {
+    const r = parseExprForPaths(q);
+    if (!r.ok) throw r.err;
+    return r.val;
+  };
+
+  it("does not apply numeric impossible-range logic to cast tokens", () => {
+    // Numerically 10 > x > 9 is impossible, but lexically '5' satisfies
+    // ('5' > '10' and '5' < '9') — flagging would be a false positive.
+    expect(findContradictions(tree("k:>'10'::string k:<'9'::string"))).toEqual([]);
+  });
+
+  it("does not pair a cast token with an uncast one", () => {
+    expect(findContradictions(tree("k:>'10'::string k:<'9'"))).toEqual([]);
+  });
+
+  it("still flags direct negation contradictions on cast tokens", () => {
+    // (The grammar has no negated-range syntax — negation exists for = and
+    // contains only, so the direct-contradiction case uses equality.)
+    expect(findContradictions(tree("k:='a'::string k:!='a'::string"))).toHaveLength(1);
+  });
+});

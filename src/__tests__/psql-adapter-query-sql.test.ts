@@ -623,3 +623,60 @@ describe("PostgresAdapter.query — lexicographic fallback is gated to strings",
     expect(eq.sql).not.toMatch(/"val_type" = 'string'/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ::string cast — forces text comparison, COERCING number/date values to
+// their string form (the opposite of the default string-only gate).
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter.query — ::string cast", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+
+  it("compiles a flat cast comparison as raw text, without numeric cast or string gate", async () => {
+    const q = await mainQuery("count:>'100'::string");
+    expect(q.sql).not.toMatch(/::numeric/);
+    expect(q.sql).not.toMatch(/"val_type" = 'string'/); // coerces, does not gate
+    expect(q.sql).toMatch(/"val" > \$\d+/);
+  });
+
+  it("compiles a flat cast comparison on a date-shaped value as raw text", async () => {
+    const q = await mainQuery("deployedAt:>'2003-01-02'::string");
+    expect(q.sql).not.toMatch(/::timestamptz/);
+    expect(q.sql).toMatch(/"val" > \$\d+/);
+  });
+
+  it("compiles a concrete-path cast without the jsonb_typeof gate", async () => {
+    const q = await mainQuery("cart.total:>'100'::string");
+    expect(q.sql).toMatch(/#>>/); // text extraction (stringifies any scalar)
+    expect(q.sql).not.toMatch(/jsonb_typeof/);
+    expect(q.sql).not.toMatch(/::numeric/);
+  });
+
+  it("compiles a wildcard cast via jsonb_path_query with text coercion", async () => {
+    const q = await mainQuery("scores[*]:>'100'::string");
+    // elements of ANY type are extracted and compared in text form
+    expect(q.sql).toMatch(/jsonb_path_query/);
+    expect(q.sql).toMatch(/#>> '{}'/);
+    expect(q.sql).not.toMatch(/jsonb_path_exists/);
+  });
+});

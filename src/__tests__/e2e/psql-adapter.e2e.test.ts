@@ -465,3 +465,39 @@ describe("PostgresAdapter e2e — typed values never fall back to lexical orderi
     expect(await search("session.count:>'40'")).toEqual(["nested"]); // numeric still fine
   });
 });
+
+describe("PostgresAdapter e2e — ::string cast coerces typed values to text", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("info", "number-attr", { v: 123 }),
+      rec("info", "string-attr", { v: "Zed" }),
+      rec("info", "date-attr", { v: new Date("2003-01-02T00:00:00Z") }),
+      rec("info", "nested", { obj: { n: 42, s: "abc" }, arr: [9, "banana"] }),
+    );
+  });
+
+  it("orders numbers and dates by their STRING form when cast", async () => {
+    // '123' < 'A' < 'Zed' lexically; '2003-…' < 'A' too.
+    expect(await search("v:<'A'::string")).toEqual(["date-attr", "number-attr"]);
+    expect(await search("v:>'A'::string")).toEqual(["string-attr"]);
+  });
+
+  it("uncast comparison still excludes typed values", async () => {
+    expect(await search("v:<'A'")).toEqual([]);
+  });
+
+  it("coerces JSON numbers at concrete paths", async () => {
+    // '42' < 'a' lexically — included only under the cast.
+    expect(await search("obj.n:<'a'::string")).toEqual(["nested"]);
+    expect(await search("obj.n:<'a'")).toEqual([]);
+  });
+
+  it("coerces array elements of any type under a wildcard cast", async () => {
+    // '9' > '5' lexically (and 'banana' > '5' too).
+    expect(await search("arr[*]:>'5'::string")).toEqual(["nested"]);
+    // without the cast, 9 > 5 numerically also matches — but via the number branch
+    expect(await search("arr[*]:>'5'")).toEqual(["nested"]);
+    // lexical: 'banana' < 'z'; numeric 9 excluded from string compare
+    expect(await search("arr[*]:<'z'::string")).toEqual(["nested"]);
+  });
+});
