@@ -268,3 +268,142 @@ describe("PostgresAdapter e2e — purge", () => {
     expect(remaining.ok && remaining.val.map((r) => r.message)).toEqual(["keep me"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nested attribute paths + null literals — live semantics. The SQL-capture
+// unit tests prove the shape compiles; these prove jsonpath/#>> actually
+// match the right rows.
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter e2e — nested attribute paths", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("info", "checkout", {
+        session: { id: "123", region: "us" },
+        users: ["123", "456"],
+        cart: { items: [{ sku: "A-1", qty: 2 }, { sku: "B-2", qty: 10 }], total: 149.5 },
+      }),
+      rec("info", "browse", {
+        session: { id: "789" },
+        users: ["789"],
+        scores: [10, 25, 40],
+      }),
+      rec("info", "flat-name", { "session.id": "123" }),
+      rec("info", "plain", { session: "not-json" }),
+    );
+  });
+
+  it("matches an object field via a dot path", async () => {
+    expect(await search("session.id:='123'")).toEqual(["checkout"]);
+    expect(await search("session.id:='789'")).toEqual(["browse"]);
+  });
+
+  it("dot path does not match a flat attribute of the same dotted name", async () => {
+    // "flat-name" stores a literal `session.id` attr — only the quoted form finds it.
+    expect(await search("session.id:='123'")).toEqual(["checkout"]);
+    expect(await search("'session.id':='123'")).toEqual(["flat-name"]);
+  });
+
+  it("matches any array element via [*], exactly", async () => {
+    expect(await search("users[*]:='123'")).toEqual(["checkout"]);
+    // exact element match — "456" is an element, "45" is not
+    expect(await search("users[*]:='45'")).toEqual([]);
+  });
+
+  it("matches a specific index via [N]", async () => {
+    expect(await search("users[0]:='123'")).toEqual(["checkout"]);
+    expect(await search("users[0]:='456'")).toEqual([]);
+    expect(await search("users[1]:='456'")).toEqual(["checkout"]);
+  });
+
+  it("walks objects inside arrays", async () => {
+    expect(await search("cart.items[*].sku:='A-1'")).toEqual(["checkout"]);
+    expect(await search("cart.items[*].sku:='C-3'")).toEqual([]);
+  });
+
+  it("matches JSON numbers from string query values", async () => {
+    expect(await search("cart.items[*].qty:='2'")).toEqual(["checkout"]);
+    expect(await search("cart.total:='149.5'")).toEqual(["checkout"]);
+  });
+
+  it("compares numerically through wildcard paths", async () => {
+    expect(await search("scores[*]:>'30'")).toEqual(["browse"]);
+    expect(await search("scores[*]:>'50'")).toEqual([]);
+    expect(await search("cart.items[*].qty:>='10'")).toEqual(["checkout"]);
+  });
+
+  it("contains matches substrings of string elements", async () => {
+    expect(await search("cart.items[*].sku:'A-'")).toEqual(["checkout"]);
+    expect(await search("users[*]:'12'")).toEqual(["checkout"]);
+  });
+
+  it("negation excludes matching logs (and non-JSON rows match the negation)", async () => {
+    expect(await search("users[*]:!='123'")).toEqual([
+      "browse",
+      "flat-name",
+      "plain",
+    ]);
+  });
+
+  it("a non-object attribute value never matches a path", async () => {
+    // "plain" has session = "not-json" (stored as string type)
+    expect(await search("session.id:='not-json'")).toEqual([]);
+  });
+});
+
+describe("PostgresAdapter e2e — null literals", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("info", "null-attr", { reason: null }),
+      rec("info", "null-string", { reason: "null" }),
+      rec("info", "json-null", { session: { id: null } }),
+      rec("info", "json-present", { session: { id: "123" } }),
+      rec("info", "no-reason", { other: "x" }),
+    );
+  });
+
+  it("reason:=null matches the null attribute, not the string", async () => {
+    expect(await search("reason:=null")).toEqual(["null-attr"]);
+  });
+
+  it("reason:='null' matches the string, not the null attribute", async () => {
+    expect(await search("reason:='null'")).toEqual(["null-string"]);
+  });
+
+  it("negated null literal excludes only the null attribute", async () => {
+    expect(await search("reason:!=null")).toEqual([
+      "json-null",
+      "json-present",
+      "no-reason",
+      "null-string",
+    ]);
+  });
+
+  it("a path null matches JSON null but not a missing key or a value", async () => {
+    expect(await search("session.id:=null")).toEqual(["json-null"]);
+  });
+});
+
+describe("PostgresAdapter e2e — path filters skip encrypted and oversized attrs", () => {
+  it("never matches a path into an encrypted json attribute", async () => {
+    const enc = new PostgresAdapter({
+      db,
+      encrypt: (plaintext) => Buffer.from(plaintext, "utf-8"), // identity "cipher" for the test
+      decrypt: (ciphertext) => Buffer.from(ciphertext, "base64url").toString("utf-8"),
+    });
+    enc.write({
+      ...rec("info", "secret-session", {}),
+      attrs: { session: { _secure: true, value: { id: "123" } } },
+    } as LogRecord);
+    await enc.flush();
+    await enc.close();
+
+    expect(await search("session.id:='123'")).toEqual([]);
+  });
+
+  it("never matches a path into an oversized (blob-routed) json attribute", async () => {
+    const big = { id: "123", pad: "x".repeat(3000) };
+    await seed(rec("info", "oversized", { session: big }));
+    expect(await search("session.id:='123'")).toEqual([]);
+  });
+});
