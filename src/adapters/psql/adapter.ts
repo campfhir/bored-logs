@@ -112,6 +112,7 @@ interface LogPurgeJobTable {
   error: string | null;
   created_at: Generated<Date>;
   started_at: Date | null;
+  finished_at: Date | null;
   locked_by: string | null;
   lock_expires_at: Date | null;
 }
@@ -573,6 +574,7 @@ function purgeRowToJob(row: PurgeJobRow): PurgeJob {
     ...(row.error != null ? { error: row.error } : {}),
     createdAt: new Date(row.created_at).toISOString(),
     ...(row.started_at != null ? { startedAt: new Date(row.started_at).toISOString() } : {}),
+    ...(row.finished_at != null ? { finishedAt: new Date(row.finished_at).toISOString() } : {}),
   };
 }
 
@@ -675,6 +677,12 @@ export type PostgresAdapterOptions = {
    * ms. Defaults to 60 000; pass 0 to disable the automatic sweep.
    */
   purgeSweepIntervalMs?: number;
+  /**
+   * How long terminal (completed / failed) purge job rows are retained before
+   * the sweep prunes them, in ms. Defaults to 24 h; pass 0 to keep them
+   * forever.
+   */
+  purgeJobRetentionMs?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -796,6 +804,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
   private readonly _purgeThreshold: number;
   private readonly _purgeBatchSize: number;
   private readonly _purgeLockTtlMs: number;
+  private readonly _purgeJobRetentionMs: number;
   private readonly _instanceId: string = generatePurgeId();
   private _sweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -836,6 +845,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
     this._purgeThreshold = opts.purgeConfirmationThreshold ?? this.PURGE_CONFIRMATION_THRESHOLD;
     this._purgeBatchSize = opts.purgeBatchSize ?? this.PURGE_BATCH_SIZE;
     this._purgeLockTtlMs = opts.purgeLockTtlMs ?? 60_000;
+    this._purgeJobRetentionMs = opts.purgeJobRetentionMs ?? 86_400_000;
 
     this._startFlushTimer();
     const sweepInterval = opts.purgeSweepIntervalMs ?? 60_000;
@@ -981,8 +991,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
    * drained batch by batch — each batch is one short atomic statement, so
    * nothing runs long enough to hit a timeout, progress is exact, and a
    * restart resumes from the surviving rows (see {@link sweepPurgeJobs}).
-   * On completion the job row is deleted; the caller never sees log ids,
-   * only the job id and aggregate counts.
+   * On completion the job row is kept (status `completed` + `finishedAt`), so
+   * ANY instance can report the outcome; the sweep prunes terminal rows after
+   * `purgeJobRetentionMs`. The caller never sees log ids — only the job id
+   * and aggregate counts.
    */
   async purge(until: Date, options?: PurgeOptions): Promise<Result<PurgeJob, PurgeError>> {
     const threshold = options?.confirmationThreshold ?? this._purgeThreshold;
@@ -1007,13 +1019,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
         _batchSize: batchSize,
         _idsCaptured: false,
       };
-      if (totalCount === 0) {
-        // Nothing to do — a memory-only completed snapshot, no row.
-        job.finishedAt = job.createdAt;
-        this._storePurgeJob(job);
-        return { ok: true, val: snapshotPurgeJob(job) };
-      }
+      if (totalCount === 0) job.finishedAt = job.createdAt;
 
+      // Every purge writes its row — even a no-op — so any instance can
+      // report the outcome later.
       await this._semaphore.run(() =>
         this._db
           .insertInto("log_purge_job")
@@ -1026,6 +1035,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
             batch_size: batchSize,
             requires_confirmation: requiresConfirmation,
             created_at: new Date(job.createdAt),
+            ...(job.finishedAt != null ? { finished_at: new Date(job.finishedAt) } : {}),
           })
           .execute(),
       );
@@ -1095,9 +1105,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
 
   /**
    * Current snapshot of a purge job. The `log_purge_job` row is authoritative
-   * while the job exists; after completion the row is gone, so a terminal
-   * snapshot is served from this instance's memory. (An instance that never
-   * saw the job therefore reports a *finished* job as `unknown purge id`.)
+   * and persists through completion, so any instance — including one that
+   * never saw the job — reports the terminal outcome until the sweep prunes
+   * the row past `purgeJobRetentionMs`. This instance's memory snapshot is
+   * the fallback for rows already pruned.
    */
   async purgeStatus(id: string): Promise<Result<PurgeJob, PurgeError>> {
     try {
@@ -1116,8 +1127,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
    * past its TTL (their instance died or was closed mid-run). Claims each with
    * this instance's lock and continues draining `log_purge_ids` from where the
    * previous owner stopped. Runs automatically on an interval (see
-   * `purgeSweepIntervalMs`); safe to call manually. Returns the number of jobs
-   * resumed; quietly returns 0 when the purge tables don't exist yet.
+   * `purgeSweepIntervalMs`); safe to call manually. Also prunes terminal
+   * (completed / failed) job rows older than `purgeJobRetentionMs`. Returns
+   * the number of jobs resumed; quietly returns 0 when the purge tables don't
+   * exist yet.
    */
   async sweepPurgeJobs(): Promise<number> {
     if (this._closing) return 0;
@@ -1136,6 +1149,21 @@ export class PostgresAdapter implements QueryableLogAdapter {
           .limit(10)
           .execute(),
       );
+      // Prune terminal rows past the retention window (0 = keep forever).
+      if (this._purgeJobRetentionMs > 0) {
+        await this._semaphore.run(() =>
+          this._db
+            .deleteFrom("log_purge_job")
+            .where("status", "in", ["completed", "failed"])
+            .where(
+              "finished_at",
+              "<",
+              sql<Date>`now() - (${this._purgeJobRetentionMs} * interval '1 millisecond')`,
+            )
+            .execute(),
+        );
+      }
+
       let resumed = 0;
       for (const row of candidates as PurgeJobRow[]) {
         const claimed = await this._semaphore.run(() =>
@@ -1278,12 +1306,25 @@ export class PostgresAdapter implements QueryableLogAdapter {
         job.deletedAttrs += batch.attrs;
 
         if (batch.ids < job._batchSize) {
-          // Drained — log_purge_ids is empty, so the job row goes too.
-          await this._semaphore.run(() =>
-            this._db.deleteFrom("log_purge_job").where("purge_id", "=", job.id).execute(),
-          );
+          // Drained — log_purge_ids is empty. The job row is KEPT as the
+          // terminal record (any instance can report the outcome); the sweep
+          // prunes it after the retention window.
           job.status = "completed";
           job.finishedAt = new Date().toISOString();
+          await this._semaphore.run(() =>
+            this._db
+              .updateTable("log_purge_job")
+              .set({
+                status: "completed",
+                deleted_logs: job.deletedLogs,
+                deleted_attrs: job.deletedAttrs,
+                finished_at: sql`now()`,
+                locked_by: null,
+                lock_expires_at: null,
+              })
+              .where("purge_id", "=", job.id)
+              .execute(),
+          );
           return;
         }
 
@@ -1308,7 +1349,13 @@ export class PostgresAdapter implements QueryableLogAdapter {
       try {
         await this._db
           .updateTable("log_purge_job")
-          .set({ status: "failed", error: job.error, locked_by: null, lock_expires_at: null })
+          .set({
+            status: "failed",
+            error: job.error,
+            finished_at: sql`now()`,
+            locked_by: null,
+            lock_expires_at: null,
+          })
           .where("purge_id", "=", job.id)
           .execute();
       } catch {

@@ -707,7 +707,7 @@ Both defaults are configurable on the adapter: `new PostgresAdapter({ db, purgeC
 - When deletion starts, the impacted log ids are captured into `log_purge_ids` and **drained batch by batch** — each batch is a single atomic statement, progress is exact, and the ids never leave the database (callers only ever see the job id and aggregate counts).
 - The whole flow works **across processes**: any instance can `confirmPurge` / `purgeStatus` a job planned by another, since the row is the source of truth.
 - A **TTL lock** (`purgeLockTtlMs`, default 60 s, re-extended every batch) ensures exactly one instance processes a job. If that instance dies or is closed mid-run, the job's row stays `"running"` with its lock released/expired, and the **sweep** — automatic every `purgeSweepIntervalMs` (default 60 s, `0` disables), or manual via `adapter.sweepPurgeJobs()` — claims and resumes it from the surviving ids.
-- When `log_purge_ids` is empty the job row is deleted — completion leaves no residue. One consequence: after completion, only the instance that processed the job can still report it as `"completed"` (from its in-memory snapshot); an instance that never saw the job gets `unknown purge id`. Treat "known id turned unknown after running" as finished.
+- Completion **keeps the job row** (`status: "completed"` + `finishedAt`), so *any* instance — including one that never saw the job — can report the outcome from the id. The sweep prunes terminal (completed / failed) rows after `purgeJobRetentionMs` (default 24 h, `0` = keep forever); a pruned id reports `unknown purge id`.
 
 ### `deepPurge` options
 

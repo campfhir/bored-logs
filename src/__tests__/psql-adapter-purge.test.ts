@@ -147,8 +147,14 @@ describe("PostgresAdapter.purge — async plan + background deletion", () => {
     });
     const done = await adapter.purgeStatus(job.id);
     expect(done.ok && done.val.deletedLogs).toBe(100);
-    // Completion deletes the job row (log_purge_ids is empty by then).
-    expect(compiled.some((c) => /delete from "log_purge_job"/i.test(c.sql))).toBe(true);
+    // Completion KEEPS the job row (status='completed' + finished_at) so any
+    // instance can still report the outcome; the drained id set is gone.
+    expect(compiled.some((c) => /delete from "log_purge_job"/i.test(c.sql))).toBe(false);
+    expect(
+      compiled.some(
+        (c) => /update "log_purge_job"/i.test(c.sql) && c.parameters.includes("completed"),
+      ),
+    ).toBe(true);
     expect(state.captured).toBe(true);
   });
 
@@ -237,7 +243,7 @@ describe("PostgresAdapter.purge — async plan + background deletion", () => {
     expect(again.ok && again.val.status).toBe("completed");
   });
 
-  it("a zero-count purge completes immediately without a job row", async () => {
+  it("a zero-count purge completes immediately, recording a completed row", async () => {
     const { db, compiled } = makePurgeDb({ logs: 0, attrs: 0, blobs: 0 });
     adapter = makeAdapter(db);
 
@@ -246,7 +252,9 @@ describe("PostgresAdapter.purge — async plan + background deletion", () => {
     if (!res.ok) return;
     expect(res.val.totalCount).toBe(0);
     expect(res.val.status).toBe("completed");
-    expect(compiled.some((c) => /insert into "log_purge_job"/i.test(c.sql))).toBe(false);
+    // Even a no-op purge writes its row, so a cross-instance check-in works.
+    expect(compiled.some((c) => /insert into "log_purge_job"/i.test(c.sql))).toBe(true);
+    expect(batchCount(compiled)).toBe(0);
   });
 
   it("close() stops after the current batch, leaving the job resumable", async () => {

@@ -391,11 +391,51 @@ describe("PostgresAdapter e2e — purge persistence across instances", () => {
 
     const remaining = await adapter.query({});
     expect(remaining.ok && remaining.val.map((r) => r.message)).toEqual(["keep me"]);
-    // Completion left no residue: both purge tables are empty.
-    const jobs = await sql`select count(*) as n from log_purge_job`.execute(db);
+    // The drained id set is gone; the job row REMAINS as the completed record
+    // — so even the planning instance (which never processed it) sees the
+    // outcome from the row.
     const ids = await sql`select count(*) as n from log_purge_ids`.execute(db);
-    expect(Number((jobs.rows[0] as { n: string }).n)).toBe(0);
     expect(Number((ids.rows[0] as { n: string }).n)).toBe(0);
+    const fromPlanner = await adapter.purgeStatus(planned.val.id);
+    expect(fromPlanner.ok && fromPlanner.val.status).toBe("completed");
+    expect(fromPlanner.ok && fromPlanner.val.finishedAt).toBeTruthy();
+  });
+
+  it("a third instance that never saw the job reports it completed from the row", async () => {
+    const cutoff = await seedOld(2);
+    const planned = await adapter.purge(cutoff);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    await awaitPurgeOn(adapter, planned.val.id);
+
+    const c = otherInstance();
+    try {
+      const seen = await c.purgeStatus(planned.val.id);
+      expect(seen.ok && seen.val.status).toBe("completed");
+      expect(seen.ok && seen.val.deletedLogs).toBe(2);
+    } finally {
+      await c.close();
+    }
+  });
+
+  it("the sweep prunes terminal rows past the retention window", async () => {
+    await sql`insert into log_purge_job
+        (purge_id, until_ts, status, log_count, attr_count, batch_size,
+         requires_confirmation, ids_captured, created_at, finished_at)
+      values ('ancient-done', now(), 'completed', 1, 0, 100, false, true,
+              now() - interval '3 days', now() - interval '3 days'),
+             ('fresh-done', now(), 'completed', 1, 0, 100, false, true,
+              now(), now())`.execute(db);
+
+    const b = otherInstance(); // default retention 24h
+    try {
+      await b.sweepPurgeJobs();
+    } finally {
+      await b.close();
+    }
+
+    const rows = await sql<{ purge_id: string }>`select purge_id from log_purge_job order by purge_id`.execute(db);
+    expect(rows.rows.map((r) => r.purge_id)).toEqual(["fresh-done"]);
   });
 
   it("sweepPurgeJobs resumes an orphaned running job (dead instance, expired lock)", async () => {
