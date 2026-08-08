@@ -57,6 +57,21 @@ export async function search(
 export async function purge(untilISO: string): Promise<{ deleted: number }> {
   const { adapter } = await ensureBoredLogs();
 
-  const res = await adapter.purge(new Date(untilISO));
-  return { deleted: res.ok ? res.val : 0 };
+  // Purge is asynchronous: plan (with counts), auto-confirm — the demo UI's
+  // dialog is the confirmation — then poll the job until it settles.
+  const planned = await adapter.purge(new Date(untilISO));
+  if (!planned.ok) return { deleted: 0 };
+  let job = planned.val;
+  if (job.status === "awaiting-confirmation") {
+    const confirmed = await adapter.confirmPurge(job.id);
+    if (!confirmed.ok) return { deleted: 0 };
+    job = confirmed.val;
+  }
+  while (job.status === "running" || job.status === "awaiting-confirmation") {
+    await new Promise((r) => setTimeout(r, 250));
+    const status = await adapter.purgeStatus(job.id);
+    if (!status.ok) break;
+    job = status.val;
+  }
+  return { deleted: job.deletedLogs };
 }

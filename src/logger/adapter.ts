@@ -178,13 +178,75 @@ export interface LogAdapter {
 /** Errors returned by QueryableLogAdapter.query(). */
 export type QueryError = "invalid log level" | "failed to query";
 
-/** Errors returned by QueryableLogAdapter.purge() / PostgresAdapter.deepPurge(). */
-export type PurgeError = "purge limit exceeded" | "failed to purge";
+/** Errors returned by the purge APIs / PostgresAdapter.deepPurge(). */
+export type PurgeError = "failed to purge" | "unknown purge id";
+
+/** Lifecycle states of an asynchronous purge job. */
+export type PurgeJobStatus =
+  /** The impacted count met the confirmation threshold; nothing is deleted until {@link QueryableLogAdapter.confirmPurge}. */
+  | "awaiting-confirmation"
+  /** Background batched deletion is in progress. */
+  | "running"
+  | "completed"
+  | "failed"
+  /** The adapter was closed mid-purge; deletion stopped after the current batch. */
+  | "aborted";
+
+/**
+ * The plan/progress snapshot returned by the purge APIs. `purge()` measures
+ * the impacted rows up front and returns immediately — deletion happens in
+ * the background in small batches, tracked here.
+ */
+export type PurgeJob = {
+  /** Handle for {@link QueryableLogAdapter.purgeStatus} / {@link QueryableLogAdapter.confirmPurge}. */
+  id: string;
+  /** The cutoff — rows with `logged_timestamp <=` this instant are purged. */
+  until: string;
+  status: PurgeJobStatus;
+  /** Planned number of `logs` rows. */
+  logCount: number;
+  /** Planned number of attribute rows (`log_attr` + `log_attr_blob`). */
+  attrCount: number;
+  /** `logCount + attrCount` — compared against the confirmation threshold. */
+  totalCount: number;
+  /** True when the job started as `awaiting-confirmation`. */
+  requiresConfirmation: boolean;
+  /** Progress: `logs` rows deleted so far. */
+  deletedLogs: number;
+  /** Progress: attribute rows deleted so far. */
+  deletedAttrs: number;
+  /** Present when `status` is `"failed"`. */
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+};
+
+/** Options accepted by {@link QueryableLogAdapter.purge}. */
+export type PurgeOptions = {
+  /**
+   * Impacted-row count (logs + attrs) at or above which the purge waits for
+   * {@link QueryableLogAdapter.confirmPurge} before deleting. Defaults to the
+   * adapter's configured threshold (10 000 unless overridden).
+   */
+  confirmationThreshold?: number;
+  /** Logs deleted per background batch. Defaults to 1 000. */
+  batchSize?: number;
+};
 
 /** A {@link LogAdapter} that can also read back and purge stored records. */
 export interface QueryableLogAdapter extends LogAdapter {
   query(options: LogQueryOptions): AsyncResult<LogRow[], QueryError>;
-  purge(until: Date, limit?: number): AsyncResult<number, PurgeError>;
+  /**
+   * Plan a purge and return immediately: counts the impacted rows, and either
+   * starts background batched deletion (below the confirmation threshold) or
+   * parks the job as `awaiting-confirmation`.
+   */
+  purge(until: Date, options?: PurgeOptions): AsyncResult<PurgeJob, PurgeError>;
+  /** Start an `awaiting-confirmation` job; for any other state, returns the current snapshot. */
+  confirmPurge(id: string): AsyncResult<PurgeJob, PurgeError>;
+  /** Check in on a purge job's progress. */
+  purgeStatus(id: string): AsyncResult<PurgeJob, PurgeError>;
 }
 
 /** Type guard: true when the adapter implements `query` and `purge`. */

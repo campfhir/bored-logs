@@ -21,6 +21,8 @@ import type {
   LogQueryOptions,
   QueryError,
   PurgeError,
+  PurgeJob,
+  PurgeOptions,
   EncryptFn,
   DecryptFn,
   AdapterWarning,
@@ -504,6 +506,23 @@ function buildLevelLeaf(
   return negated ? eb.not(predicate) : predicate;
 }
 
+// ---------------------------------------------------------------------------
+// Purge job helpers
+// ---------------------------------------------------------------------------
+
+/** Random purge-job id (crypto.randomUUID with a portable fallback). */
+function generatePurgeId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `purge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Public copy of a purge job, without the internal batch-size field. */
+function snapshotPurgeJob(job: PurgeJob & { _batchSize: number }): PurgeJob {
+  const { _batchSize, ...pub } = job;
+  return { ...pub };
+}
+
 /** A single filter leaf → a built-in column comparison or a correlated (NOT) EXISTS on log_attr. */
 function buildLeaf(
   eb: ExpressionBuilder<any, any>,
@@ -575,6 +594,14 @@ export type PostgresAdapterOptions = {
    * when constructing the adapter standalone (e.g. for querying only).
    */
   levels?: Record<string, number>;
+  /**
+   * Impacted-row count (logs + attrs) at or above which `purge()` waits for
+   * `confirmPurge()` before deleting anything. Defaults to 10 000. Per-call
+   * override via `purge(until, { confirmationThreshold })`.
+   */
+  purgeConfirmationThreshold?: number;
+  /** Logs deleted per background purge batch. Defaults to 1 000. */
+  purgeBatchSize?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -687,6 +714,13 @@ export class PostgresAdapter implements QueryableLogAdapter {
   private isProcessing = false;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
 
+  // ── Purge job state ───────────────────────────────────────────────────────
+  private readonly _purgeJobs = new Map<string, PurgeJob & { _batchSize: number }>();
+  private readonly _activePurges = new Set<Promise<void>>();
+  private _closing = false;
+  private readonly _purgeThreshold: number;
+  private readonly _purgeBatchSize: number;
+
   private readonly BATCH_SIZE = 50;
   private readonly FLUSH_INTERVAL_MS = 5000;
   /**
@@ -704,8 +738,12 @@ export class PostgresAdapter implements QueryableLogAdapter {
    * the log_attr_val_name_idx index.
    */
   private readonly MAX_ATTR_KEY_LENGTH = 1024;
-  /** Hard ceiling on records deleted per purge() call. */
-  private readonly PURGE_MAX = 10_000;
+  /** Default impacted-row count at which purge() requires confirmation. */
+  private readonly PURGE_CONFIRMATION_THRESHOLD = 10_000;
+  /** Default logs deleted per background purge batch. */
+  private readonly PURGE_BATCH_SIZE = 1_000;
+  /** Retained purge jobs — pruned oldest-finished-first past this cap. */
+  private readonly MAX_PURGE_JOBS = 100;
 
   /** Builds an adapter from the given options and starts the periodic flush timer. */
   constructor(opts: PostgresAdapterOptions) {
@@ -717,6 +755,8 @@ export class PostgresAdapter implements QueryableLogAdapter {
     this._semaphore = new Semaphore(opts.maxConnections ?? 2);
     this._onWarning = opts.onWarning ?? null;
     this._levels = { ...LOG_LEVELS, ...opts.levels };
+    this._purgeThreshold = opts.purgeConfirmationThreshold ?? this.PURGE_CONFIRMATION_THRESHOLD;
+    this._purgeBatchSize = opts.purgeBatchSize ?? this.PURGE_BATCH_SIZE;
 
     this._startFlushTimer();
   }
@@ -844,91 +884,186 @@ export class PostgresAdapter implements QueryableLogAdapter {
     }
   }
 
-  // ── QueryableLogAdapter.purge ───────────────────────────────────────────
+  // ── QueryableLogAdapter.purge — async plan / confirm / status ────────────
 
-  /** Deletes logs on or before `until` up to a bounded limit (max 10,000); use {@link deepPurge} for unbounded deletes. */
-  async purge(until: Date, limit?: number): Promise<Result<number, PurgeError>> {
-    if (limit !== undefined && limit > this.PURGE_MAX) {
-      return {
-        ok: false,
-        err: new Err("purge limit exceeded").addCause(
-          `limit ${limit} exceeds maximum of ${this.PURGE_MAX}. Use deepPurge() for unbounded deletes.`,
-        ),
-      };
-    }
-    const effectiveLimit = limit ?? this.PURGE_MAX;
+  /**
+   * Plan a purge of rows with `logged_timestamp <= until` and return
+   * immediately: the impacted `logs` / attribute rows are counted up front,
+   * and the returned {@link PurgeJob} carries the counts plus an `id` for
+   * {@link purgeStatus} / {@link confirmPurge}.
+   *
+   * When the total is below the confirmation threshold, batched deletion
+   * starts in the background right away; at or above it, the job parks as
+   * `awaiting-confirmation` and nothing is deleted until {@link confirmPurge}.
+   * Each batch is its own short transaction, so no statement runs long enough
+   * to hit a timeout regardless of how many rows are purged, and writes
+   * interleave between batches.
+   */
+  async purge(until: Date, options?: PurgeOptions): Promise<Result<PurgeJob, PurgeError>> {
+    const threshold = options?.confirmationThreshold ?? this._purgeThreshold;
+    const batchSize = options?.batchSize ?? this._purgeBatchSize;
     try {
-      const result = await this._db.transaction().execute(async (tx) => {
-        // When no explicit limit is given, count first so we don't silently
-        // delete more than PURGE_MAX rows on a caller's behalf.
-        if (limit === undefined) {
-          const countRow = await tx
-            .selectFrom("logs")
-            .select((eb) => eb.fn.countAll<number>().as("n"))
-            .where("logged_timestamp", "<=", until)
-            .executeTakeFirstOrThrow();
-          const count = countRow.n;
-          if (count > this.PURGE_MAX) {
-            throw Object.assign(
-              new Error(
-                `${count} records match — pass an explicit limit (max ${this.PURGE_MAX}) or use deepPurge() for unbounded deletes.`,
-              ),
-              { code: "PURGE_LIMIT_EXCEEDED" as const },
-            );
-          }
+      const counts = await this._semaphore.run(() => this._countImpacted(until));
+      const totalCount = counts.logs + counts.attrs;
+      const requiresConfirmation = totalCount >= threshold && totalCount > 0;
+
+      const job: PurgeJob & { _batchSize: number } = {
+        id: generatePurgeId(),
+        until: until.toISOString(),
+        status:
+          totalCount === 0 ? "completed" : requiresConfirmation ? "awaiting-confirmation" : "running",
+        logCount: counts.logs,
+        attrCount: counts.attrs,
+        totalCount,
+        requiresConfirmation,
+        deletedLogs: 0,
+        deletedAttrs: 0,
+        createdAt: new Date().toISOString(),
+        _batchSize: batchSize,
+      };
+      if (totalCount === 0) job.finishedAt = job.createdAt;
+      this._storePurgeJob(job);
+
+      if (job.status === "running") this._startPurge(job);
+      return { ok: true, val: snapshotPurgeJob(job) };
+    } catch (err) {
+      const cause = err instanceof Error ? err : String(err);
+      return { ok: false, err: new Err("failed to purge").addCause(cause) };
+    }
+  }
+
+  /**
+   * Confirm an `awaiting-confirmation` purge, starting its background
+   * deletion. For a job in any other state this is a no-op that returns the
+   * current snapshot, so it can double as a check-in.
+   */
+  async confirmPurge(id: string): Promise<Result<PurgeJob, PurgeError>> {
+    const job = this._purgeJobs.get(id);
+    if (!job) {
+      return { ok: false, err: new Err("unknown purge id").addCause(`no purge job ${id}`) };
+    }
+    if (job.status === "awaiting-confirmation") {
+      job.status = "running";
+      this._startPurge(job);
+    }
+    return { ok: true, val: snapshotPurgeJob(job) };
+  }
+
+  /** Current snapshot of a purge job — status, planned counts, and progress. */
+  async purgeStatus(id: string): Promise<Result<PurgeJob, PurgeError>> {
+    const job = this._purgeJobs.get(id);
+    if (!job) {
+      return { ok: false, err: new Err("unknown purge id").addCause(`no purge job ${id}`) };
+    }
+    return { ok: true, val: snapshotPurgeJob(job) };
+  }
+
+  /** Count the rows a purge of `until` would delete (logs, and attr + blob rows). */
+  private async _countImpacted(until: Date): Promise<{ logs: number; attrs: number }> {
+    const count = async (table: "logs" | "log_attr" | "log_attr_blob"): Promise<number> => {
+      const row = await this._db
+        .selectFrom(table)
+        .select((eb) => eb.fn.countAll<number>().as("n"))
+        .where("logged_timestamp", "<=", until)
+        .executeTakeFirstOrThrow();
+      return Number(row.n);
+    };
+    const logs = await count("logs");
+    const attrs = (await count("log_attr")) + (await count("log_attr_blob"));
+    return { logs, attrs };
+  }
+
+  /** Store a job, pruning the oldest finished jobs past the retention cap. */
+  private _storePurgeJob(job: PurgeJob & { _batchSize: number }): void {
+    if (this._purgeJobs.size >= this.MAX_PURGE_JOBS) {
+      for (const [id, existing] of this._purgeJobs) {
+        if (existing.status !== "running" && existing.status !== "awaiting-confirmation") {
+          this._purgeJobs.delete(id);
+          if (this._purgeJobs.size < this.MAX_PURGE_JOBS) break;
         }
+      }
+    }
+    this._purgeJobs.set(job.id, job);
+  }
 
-        // Capture the bounded set of IDs once so all three DELETEs target
-        // exactly the same rows regardless of concurrent inserts.
-        await sql`
-          CREATE TEMP TABLE _purge_ids ON COMMIT DROP AS
-            SELECT log_id FROM logs
-            WHERE logged_timestamp <= ${until}
-            LIMIT ${sql.lit(effectiveLimit)}
-        `.execute(tx);
+  /** Kick off the background batched deletion for a running job. */
+  private _startPurge(job: PurgeJob & { _batchSize: number }): void {
+    job.startedAt = new Date().toISOString();
+    const run = this._runPurge(job).finally(() => this._activePurges.delete(run));
+    this._activePurges.add(run);
+  }
 
-        const countRow = await sql<{ n: string }>`
-          SELECT count(*) AS n FROM _purge_ids
-        `.execute(tx);
-        const count = countRow.rows[0]?.n != null ? parseInt(countRow.rows[0].n, 10) : 0;
-        if (count === 0) return 0;
+  /** The background loop: one short transaction per batch until done, closed, or failed. */
+  private async _runPurge(job: PurgeJob & { _batchSize: number }): Promise<void> {
+    const until = new Date(job.until);
+    try {
+      for (;;) {
+        if (this._closing) {
+          job.status = "aborted";
+          job.finishedAt = new Date().toISOString();
+          return;
+        }
+        const batch = await this._semaphore.run(() => this._purgeBatch(until, job._batchSize));
+        job.deletedLogs += batch.logs;
+        job.deletedAttrs += batch.attrs;
+        if (batch.logs < job._batchSize) break; // final (possibly empty) batch
+      }
+      job.status = "completed";
+      job.finishedAt = new Date().toISOString();
+    } catch (err) {
+      job.status = "failed";
+      job.error = err instanceof Error ? err.message : String(err);
+      job.finishedAt = new Date().toISOString();
+    }
+  }
 
-        await sql`
+  /** Delete one bounded batch; returns the rows removed per table group. */
+  private async _purgeBatch(
+    until: Date,
+    batchSize: number,
+  ): Promise<{ logs: number; attrs: number }> {
+    return this._db.transaction().execute(async (tx) => {
+      // Capture the bounded set of IDs once so all three DELETEs target
+      // exactly the same rows regardless of concurrent inserts.
+      await sql`
+        CREATE TEMP TABLE _purge_ids ON COMMIT DROP AS
+          SELECT log_id FROM logs
+          WHERE logged_timestamp <= ${until}
+          LIMIT ${sql.lit(batchSize)}
+      `.execute(tx);
+
+      const countDeleted = async (query: ReturnType<typeof sql>): Promise<number> => {
+        const res = await query.execute(tx);
+        const n = (res.rows[0] as { n?: string | number } | undefined)?.n;
+        return n != null ? Number(n) : 0;
+      };
+
+      const blobs = await countDeleted(sql`
+        WITH d AS (
           DELETE FROM log_attr_blob
           USING _purge_ids
           WHERE log_attr_blob.log_id = _purge_ids.log_id
-        `.execute(tx);
-
-        await sql`
+          RETURNING 1
+        ) SELECT count(*) AS n FROM d
+      `);
+      const attrs = await countDeleted(sql`
+        WITH d AS (
           DELETE FROM log_attr
           USING _purge_ids
           WHERE log_attr.log_id = _purge_ids.log_id
-        `.execute(tx);
-
-        await sql`
+          RETURNING 1
+        ) SELECT count(*) AS n FROM d
+      `);
+      const logs = await countDeleted(sql`
+        WITH d AS (
           DELETE FROM logs
           USING _purge_ids
           WHERE logs.log_id = _purge_ids.log_id
-        `.execute(tx);
-
-        return count;
-      });
-      return { ok: true, val: result };
-    } catch (err) {
-      const cause = err instanceof Error ? err : String(err);
-      // The in-transaction count check throws with code PURGE_LIMIT_EXCEEDED —
-      // surface it under the same matchable message as the synchronous check.
-      const limitExceeded =
-        err instanceof Error &&
-        (err as { code?: string }).code === "PURGE_LIMIT_EXCEEDED";
-      if (limitExceeded) {
-        return {
-          ok: false,
-          err: new Err("purge limit exceeded").addCause(cause),
-        };
-      }
-      return { ok: false, err: new Err("failed to purge").addCause(cause) };
-    }
+          RETURNING 1
+        ) SELECT count(*) AS n FROM d
+      `);
+      return { logs, attrs: attrs + blobs };
+    });
   }
 
   /**
@@ -1043,13 +1178,19 @@ export class PostgresAdapter implements QueryableLogAdapter {
     await this._flushQueue();
   }
 
-  /** Stops the flush timer and flushes any remaining queued records. */
+  /**
+   * Stops the flush timer, flushes any remaining queued records, and stops
+   * in-flight purges: each finishes its current batch, then its job is marked
+   * `aborted`.
+   */
   async close(): Promise<void> {
+    this._closing = true;
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
     await this._flushQueue();
+    await Promise.allSettled([...this._activePurges]);
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────

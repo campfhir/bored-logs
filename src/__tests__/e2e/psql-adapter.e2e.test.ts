@@ -251,21 +251,97 @@ describe("PostgresAdapter e2e — date/time attribute values", () => {
   });
 });
 
-describe("PostgresAdapter e2e — purge", () => {
-  it("deletes rows older than the cutoff and reports the count", async () => {
-    await seed(rec("info", "keep me", { a: "1" }));
-    // Backdate one row well past the cutoff.
-    await sql`update logs set logged_timestamp = now() - interval '10 days' where message = 'old'`.execute(db);
-    await seed(rec("info", "old", { a: "2" }));
-    await sql`update logs set logged_timestamp = now() - interval '10 days' where message = 'old'`.execute(db);
+describe("PostgresAdapter e2e — async purge", () => {
+  /** Poll a purge job until it leaves running/awaiting states (with a deadline). */
+  async function awaitPurge(id: string) {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const status = await adapter.purgeStatus(id);
+      if (!status.ok) throw status.err;
+      if (status.val.status !== "running") return status.val;
+      if (Date.now() > deadline) throw new Error("purge did not settle in time");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
 
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  /** Seed `n` old (pre-cutoff) logs with one attr each, plus one fresh keeper. */
+  async function seedOldRows(n: number): Promise<Date> {
+    const old = Array.from({ length: n }, (_, i) => rec("info", `old-${i}`, { i: String(i) }));
+    await seed(...old, rec("info", "keep me", { a: "1" }));
+    await sql`update logs set logged_timestamp = now() - interval '10 days' where message like 'old-%'`.execute(db);
+    await sql`update log_attr set logged_timestamp = now() - interval '10 days'
+              where log_id in (select log_id from logs where message like 'old-%')`.execute(db);
+    return new Date(Date.now() - 24 * 60 * 60 * 1000);
+  }
+
+  it("returns counts immediately and deletes in the background", async () => {
+    const cutoff = await seedOldRows(3);
+
     const res = await adapter.purge(cutoff);
     expect(res.ok).toBe(true);
-    expect(res.ok && res.val).toBe(1);
+    if (!res.ok) return;
+    expect(res.val.logCount).toBe(3);
+    expect(res.val.attrCount).toBe(3);
+    expect(res.val.totalCount).toBe(6);
+    expect(res.val.requiresConfirmation).toBe(false);
+
+    const done = await awaitPurge(res.val.id);
+    expect(done.status).toBe("completed");
+    expect(done.deletedLogs).toBe(3);
+    expect(done.deletedAttrs).toBe(3);
 
     const remaining = await adapter.query({});
     expect(remaining.ok && remaining.val.map((r) => r.message)).toEqual(["keep me"]);
+  });
+
+  it("requires confirmation above the threshold and deletes nothing until confirmed", async () => {
+    const cutoff = await seedOldRows(4); // 4 logs + 4 attrs = 8 impacted
+
+    const res = await adapter.purge(cutoff, { confirmationThreshold: 5 });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.val.status).toBe("awaiting-confirmation");
+
+    // Nothing deleted while awaiting.
+    await new Promise((r) => setTimeout(r, 100));
+    const before = await adapter.query({ start: "1970-01-01T00:00:00.000Z", end: "2100-01-01T00:00:00.000Z" });
+    expect(before.ok && before.val).toHaveLength(5);
+
+    const confirmed = await adapter.confirmPurge(res.val.id);
+    expect(confirmed.ok).toBe(true);
+    const done = await awaitPurge(res.val.id);
+    expect(done.status).toBe("completed");
+    expect(done.deletedLogs).toBe(4);
+
+    const after = await adapter.query({});
+    expect(after.ok && after.val.map((r) => r.message)).toEqual(["keep me"]);
+  });
+
+  it("deletes across multiple batches and reports progress totals", async () => {
+    const cutoff = await seedOldRows(7);
+
+    const res = await adapter.purge(cutoff, { batchSize: 3 });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const done = await awaitPurge(res.val.id);
+    expect(done.status).toBe("completed");
+    expect(done.deletedLogs).toBe(7);
+    expect(done.deletedAttrs).toBe(7);
+  });
+
+  it("a purge matching nothing completes immediately", async () => {
+    await seed(rec("info", "fresh", { a: "1" }));
+    const res = await adapter.purge(new Date("1990-01-01"));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.val.status).toBe("completed");
+    expect(res.val.totalCount).toBe(0);
+  });
+
+  it("purgeStatus on an unknown id errors", async () => {
+    const res = await adapter.purgeStatus("does-not-exist");
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.err.message).toBe("unknown purge id");
   });
 });
 

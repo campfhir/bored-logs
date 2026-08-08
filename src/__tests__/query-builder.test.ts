@@ -150,7 +150,23 @@ describe("execute()", () => {
         calls.push(opts);
         return { ok: true as const, val: rows };
       }),
-      purge: vi.fn(async () => ({ ok: true as const, val: 0 })),
+      purge: vi.fn(async () => ({
+        ok: true as const,
+        val: {
+          id: "p1",
+          until: new Date(0).toISOString(),
+          status: "completed" as const,
+          logCount: 0,
+          attrCount: 0,
+          totalCount: 0,
+          requiresConfirmation: false,
+          deletedLogs: 0,
+          deletedAttrs: 0,
+          createdAt: new Date(0).toISOString(),
+        },
+      })),
+      confirmPurge: vi.fn(),
+      purgeStatus: vi.fn(),
     };
   }
 

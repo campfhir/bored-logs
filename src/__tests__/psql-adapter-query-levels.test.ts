@@ -149,17 +149,6 @@ describe("PostgresAdapter.query — level filtering", () => {
     expect(await capturedLevels({})).toEqual(ALL_LEVELS);
   });
 
-  // ── purge validation error (stable message + cause) ─────────────────────────
-
-  it("purge() rejects an over-limit request with a matchable message + cause", async () => {
-    // The synchronous limit check returns before any DB access.
-    const res = await adapter.purge(new Date(), 10_001);
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.err.message).toBe("purge limit exceeded");
-      expect(res.err.cause?.message).toContain("10001");
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------

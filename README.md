@@ -635,10 +635,24 @@ export async function queryLogs(options?: LogQueryOptions) {
   return result.val;
 }
 
-export async function purgeLogs(until: string, limit?: number) {
+export async function purgeLogs(until: string) {
   const session = await auth();
   requireRole(["admin"], session);
-  return logger.queryAdapter().purge(new Date(until), limit); // Result<number, string>
+  // Returns immediately with the impacted counts and a job id — the deletion
+  // runs in the background. See "purge — asynchronous with confirmation".
+  return logger.queryAdapter().purge(new Date(until)); // Result<PurgeJob, PurgeError>
+}
+
+export async function confirmPurge(id: string) {
+  const session = await auth();
+  requireRole(["admin"], session);
+  return logger.queryAdapter().confirmPurge(id);
+}
+
+export async function purgeStatus(id: string) {
+  const session = await auth();
+  requireRole(["admin"], session);
+  return logger.queryAdapter().purgeStatus(id);
 }
 ```
 
@@ -661,16 +675,32 @@ export async function purgeLogs(until: string, limit?: number) {
 
 `level`, `levels`, and `minLevel` are mutually exclusive — the type makes combining them a compile-time error. Omit all three to query every level. `minLevel` uses the same ranking as the emit gate (lower rank = more severe): `minLevel: "warn"` yields `warn`, `error`, `critical`; `minLevel: "debug"` yields everything. These fields are typed as `LogLevel` (`keyof LogLevels`) — to pass a custom level here, augment the `LogLevels` interface (see [Custom levels](#custom-levels)). An unknown level name still returns an `Err("invalid log level")` at runtime.
 
-### `purge` options
+### `purge` — asynchronous, with confirmation
 
-`purge(until: Date, limit?: number): AsyncResult<number, string>`
+`purge(until: Date, options?: PurgeOptions): AsyncResult<PurgeJob, PurgeError>`
 
-Deletes up to `limit` records with `logged_timestamp <= until`. Call repeatedly to page through a large backlog. Use `deepPurge` to remove everything in one pass.
+Purging never blocks the caller on the deletion, so a large purge cannot time out the request that started it:
 
-| Parameter | Type     | Default                 | Description                                                                                                    |
-| --------- | -------- | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `until`   | `Date`   | required                | Delete records on or before this timestamp                                                                     |
-| `limit`   | `number` | `10 000` (max `10 000`) | Maximum records deleted per call. Omitting runs a pre-count; returns `Err` if more than `10 000` records match |
+1. **`purge(until)`** counts the impacted rows up front and **returns immediately** with a `PurgeJob` — the counts (`logCount`, `attrCount`, `totalCount`), an `id`, and a `status`.
+2. Below the confirmation threshold the **deletion starts in the background** right away, in small batches (each its own short transaction — nothing runs long enough to hit a statement timeout, and normal writes/queries interleave between batches).
+3. At or above the threshold (**default 10 000** impacted rows, logs + attrs) the job parks as `"awaiting-confirmation"` and **nothing is deleted** until you call **`confirmPurge(id)`** — the guard against accidentally grinding the database with an enormous delete.
+4. **`purgeStatus(id)`** is the check-in: `status` (`awaiting-confirmation` → `running` → `completed` / `failed` / `aborted`) plus live progress (`deletedLogs`, `deletedAttrs`).
+
+```typescript
+const planned = await adapter.purge(new Date("2026-01-01"));
+if (planned.ok && planned.val.requiresConfirmation) {
+  // surface planned.val.totalCount to the operator, then:
+  await adapter.confirmPurge(planned.val.id);
+}
+// poll purgeStatus(planned.val.id) until status is no longer "running"
+```
+
+| Option                          | Type     | Default  | Description                                                     |
+| ------------------------------- | -------- | -------- | --------------------------------------------------------------- |
+| `options.confirmationThreshold` | `number` | `10 000` | Impacted-row count (logs + attrs) requiring `confirmPurge`      |
+| `options.batchSize`             | `number` | `1 000`  | Logs deleted per background batch                               |
+
+Both defaults are configurable on the adapter: `new PostgresAdapter({ db, purgeConfirmationThreshold, purgeBatchSize })`. Jobs are held in the adapter's memory (latest 100) — a process restart forgets un-started jobs, and `adapter.close()` lets the current batch finish before marking in-flight jobs `"aborted"`.
 
 ### `deepPurge` options
 
