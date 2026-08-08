@@ -30,7 +30,10 @@ type Suggestion = { display: string; insert: string; kind?: SuggestionKind };
 const BUILTIN_KEYS = ["$timestamp", "$level", "$message"];
 
 function quoteKey(key: string): string {
-  return /[\s:'"=<>!]/.test(key) ? `'${key.replace(/'/g, "\\'")}'` : key;
+  // Dots and brackets are included: a suggested key comes from flat log.meta,
+  // and quoting is what keeps a flat name like `build.sha` literal — bare, it
+  // would re-parse as a path into an object attribute.
+  return /[\s:'"=<>![\].]/.test(key) ? `'${key.replace(/'/g, "\\'")}'` : key;
 }
 
 function escapeValue(value: string): string {
@@ -187,6 +190,12 @@ export function LogSearchSyntaxHelp({ className }: { className?: string }): Reac
         <dt>key:&lt;='value'</dt> <dd>lte</dd>
         <dt>bare text</dt>      <dd>message contains</dd>
         <dt>$message $level $timestamp</dt> <dd>built-in columns (a bare key is an attribute)</dd>
+        <dt>obj.field:'v'</dt>  <dd>nested object field</dd>
+        <dt>arr[*]:='v'</dt>    <dd>any array element</dd>
+        <dt>arr[0]:='v'</dt>    <dd>array element by index</dd>
+        <dt>obj.items[*].sku:='v'</dt> <dd>paths combine</dd>
+        <dt>'key.with.dot':'v'</dt> <dd>quoted = literal flat key, not a path</dd>
+        <dt>key:=null</dt>      <dd>null literal (quote 'null' for the string)</dd>
         <dt>a b / a &amp;&amp; b</dt> <dd>and</dd>
         <dt>a || b</dt>         <dd>or (binds tighter than and)</dd>
         <dt>(a b) || c</dt>     <dd>grouping</dd>

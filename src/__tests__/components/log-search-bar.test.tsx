@@ -571,3 +571,39 @@ describe("LogSearchBar — debounced validation", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nested attribute paths in the search bar.
+// ---------------------------------------------------------------------------
+
+describe("LogSearchBar — nested path keys", () => {
+  it("round-trips a path-key chip through edit", () => {
+    const onSearch = vi.fn();
+    render(<LogSearchBar onSearch={onSearch} />);
+    const input = getInput();
+    type(input, "session.id:='123'");
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(document.querySelectorAll("[data-log-filter-chip]")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Edit filter session.id:='123'" }));
+    expect(getInput().value).toBe("session.id:='123'");
+  });
+
+  it("inserts a flat meta key containing a dot QUOTED, keeping it literal", () => {
+    const logsWithDots: LogRow[] = [
+      { id: "1", level: "info", message: "m", meta: { "build.sha": "abc" }, timestamp: null },
+    ];
+    render(<LogSearchBar logs={logsWithDots} />);
+    type(getInput(), "build");
+    fireEvent.mouseDown(screen.getByRole("option", { name: "build.sha" }));
+    expect(getInput().value).toBe("'build.sha':");
+  });
+
+  it("renders the nested-path and null rows in the syntax help", () => {
+    render(<LogSearchSyntaxHelp />);
+    const helpText = document.querySelector("[data-log-search-syntax-help]")!.textContent!;
+    expect(helpText).toContain("obj.field");
+    expect(helpText).toContain("arr[*]");
+    expect(helpText).toContain("key:=null");
+  });
+});

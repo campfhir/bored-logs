@@ -14,6 +14,7 @@ Structured PostgreSQL-backed logging for React + Node — custom adapter-based l
   - [Reserved attribute names](#reserved-attribute-names)
   - [Output templates](#output-templates)
 - [Secure values](#secure-values)
+- [Programmatic query builder](#programmatic-query-builder)
 - [Server actions](#server-actions)
 - [Client-side logging (`useLogger`)](#client-side-logging-uselogger)
   - [1. Server: an ingest Route Handler](#1-server-an-ingest-route-handler)
@@ -577,6 +578,42 @@ Both wrappers work in a message template (the placeholder appears in the interpo
 
 ---
 
+## Programmatic query builder
+
+Build an attribute filter in code — no string grammar, no precedence rules — then run it or hand it anywhere `attributeFilter` is accepted:
+
+```typescript
+import { where, literal } from "@campfhir/bored-logs";
+
+const results = await where("session.id").eq("123")
+  .and(where("users[*]").eq("123"))     // any array element
+  .or(where("$level").eq("error"))      // built-in columns work too
+  .execute(logger, { limit: 50 });      // or pass a PostgresAdapter directly
+
+if (results.ok) console.table(results.val);
+```
+
+Start a filter with `where(key)` — dotted/bracketed keys are [nested paths](#nested-attribute-paths), `$`-prefixed keys are the built-in columns — or `literal(key)` for a flat attribute whose name contains dots. Then pick an operator:
+
+| Method | Grammar equivalent |
+| --- | --- |
+| `.eq(v)` / `.notEq(v)` | `key:='v'` / `key:!='v'` |
+| `.contains(v)` / `.notContains(v)` | `key:'v'` / `key:!'v'` |
+| `.gt(v)` `.gte(v)` `.lt(v)` `.lte(v)` | `key:>'v'` … |
+| `.isNull()` / `.isNotNull()` | `key:=null` / `key:!=null` |
+
+Values may be strings, numbers, booleans, or `Date`s (serialized to ISO). Builders are **immutable** — every call returns a new one — and combine **left-to-right**: `X.and(Y).or(Z)` means `(X AND Y) OR Z`, reading like the chain. (The string grammar differs: there `||` binds tighter than AND.)
+
+Terminals:
+
+- **`.build()`** — the `FilterExpr` tree, in the same normal form the string parser produces; pass to `query({ attributeFilter })`.
+- **`.toQueryString()`** — the string-grammar form; pasteable into `LogSearchBar` and guaranteed to re-parse to the same tree.
+- **`.execute(target, options?)`** — runs the query. `target` is a `Logger` (routes through `queryAdapter()`) or a queryable adapter; `options` is everything `query()` accepts except `attributeFilter`. Returns the same `Result` as `query()`.
+
+Mistakes fail fast at build time instead of silently matching nothing: a malformed bracket path (`where("users[*")`) or an unparseable `$timestamp` value throws a `TypeError` with the fix in the message.
+
+---
+
 ## Server actions
 
 Call `adapter.query()` and `adapter.purge()` directly from your own server actions. Wrap them to add authentication and role checks.
@@ -856,6 +893,42 @@ Three `$`-prefixed keys map to real columns on the `logs` table instead of store
 Any other key — `$`-less, or `$application` / `$version`, which are stored as ordinary attributes — is an attribute lookup against `log_attr`.
 
 > **`$timestamp:` is intersected with the query's date window.** `query()` always constrains results to `[start, end]` (default: the last 24 hours). A `$timestamp:` term narrows *within* that window — it doesn't widen it. To search historical logs, widen the window via the `start` / `end` options (or the [`LogDateRangePicker`](#logdaterangepicker)).
+
+#### Nested attribute paths
+
+Attributes holding objects or arrays are stored as JSON and can be queried **into** with dot and bracket paths:
+
+```
+session.id:'123'          # field of an object attribute
+users[*]:='123'           # ANY element of an array attribute (exact match)
+users[0]:='123'           # a specific index
+cart.items[*].sku:='A-1'  # paths combine — objects inside arrays
+scores[*]:>'30'           # numeric comparison across elements
+```
+
+Semantics mirror flat attributes: `=` on a path matches both the JSON string `"123"` and the number `123`; comparisons are numeric or chronological when the value looks numeric/ISO-dated; `contains` does substring matching on **string** elements. Negation (`users[*]:!='123'`) matches logs where *no* element matches — including logs without the attribute.
+
+**Bare = path, quoted = literal.** An unquoted dotted key is always a path; quote it to mean a flat attribute literally named with a dot:
+
+```
+session.id:'123'          # path: field `id` inside object attr `session`
+'session.id':'123'        # literal flat attribute named "session.id"
+```
+
+> **Migration note (0.5.0):** previously an unquoted `a.b:'x'` matched a flat attribute named `a.b`. It is now a path — add quotes to keep the old meaning. The search-bar autocomplete inserts dotted flat keys pre-quoted.
+
+Two storage-driven caveats: path filters never match **encrypted** attributes (the ciphertext can't be traversed — so negated path filters *do* match them), and never match attributes whose JSON exceeds 2 000 bytes (routed to unindexed blob storage, same as flat filters).
+
+#### Null literals
+
+An **unquoted** `null` / `NULL` with `:=` or `:` matches the null literal; a **quoted** `'null'` matches the string:
+
+```
+reason:=null              # attribute stored as null
+reason:!=null             # attribute absent, non-null, or anything else
+session.id:=null          # explicit JSON null at a path (missing keys do NOT match)
+reason:='null'            # the four-character string "null"
+```
 
 ```typescript
 import { parseLogQueryExpr, formatExpr, isUnsatisfiable } from "@campfhir/bored-logs";
