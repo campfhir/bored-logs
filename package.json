@@ -1,7 +1,7 @@
 {
   "name": "@campfhir/bored-logs",
   "version": "0.7.0",
-  "description": "Structured PostgreSQL-backed logging for Next.js \u2014 custom logger, adapter architecture, React UI components, and DB migration.",
+  "description": "Structured PostgreSQL-backed logging for React + Node \u2014 adapter-based logger, typed message templates, boolean log search with nested-attribute queries, HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",

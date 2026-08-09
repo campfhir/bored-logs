@@ -1,6 +1,6 @@
 # @campfhir/bored-logs
 
-Structured PostgreSQL-backed logging for React + Node — custom adapter-based logger, typed message templates, React UI components, and Kysely migration. The examples below use Next.js idioms, but the package is framework-agnostic; see [Using with Vite / React](#using-with-vite--react-non-nextjs) for a plain Vite SPA + Node backend.
+Structured PostgreSQL-backed logging for React + Node — an adapter-based logger with typed message templates, a boolean log-search grammar (nested-attribute queries, a programmatic builder), HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations. The examples below use Next.js idioms, but the package is framework-agnostic; see [Using with Vite / React](#using-with-vite--react-non-nextjs) for a plain Vite SPA + Node backend.
 
 ## Contents
 
@@ -145,9 +145,11 @@ app.post("/api/logs/query", async (c) => {
 });
 
 app.post("/api/logs/purge", async (c) => {
-  const { until, limit } = await c.req.json();
-  const result = await logger.queryAdapter().purge(new Date(until), limit);
-  return result.ok ? c.json({ deleted: result.val }) : c.json({ error: result.err }, 500);
+  const { until } = await c.req.json();
+  // purge() returns a PurgeJob immediately; deletion runs in the background
+  // (see the `purge` section for the full plan/confirm/status flow).
+  const result = await logger.queryAdapter().purge(new Date(until));
+  return result.ok ? c.json(result.val) : c.json({ error: result.err.message }, 500);
 });
 ```
 
@@ -214,7 +216,8 @@ Check which migrations have run with `migrationStatus()`:
 
 ```typescript
 const status = await adapter.migrationStatus();
-// [{ name: "001_logs", applied: true }, { name: "002_attr_val_name_index", applied: true }]
+// [{ name: "001_logs", applied: true }, { name: "002_attr_val_name_index", applied: true },
+//  { name: "003_purge_jobs", applied: true }, { name: "004_e2e_clients", applied: true }]
 ```
 
 #### Running migrations outside the adapter lifecycle
@@ -320,6 +323,13 @@ Any **other** key you pass becomes a global attribute, so `createLogger({ commit
 | `maxConnections` | `number`                         | `2`                                    | Max concurrent DB operations                                                                                                  |
 | `onWarning`      | `(w: AdapterWarning) => void`    | —                                      | Called when an attribute key or value is truncated                                                                            |
 | `levels`         | `Record<string, number>`         | —                                      | Custom levels merged into the built-ins (only needed for standalone use — a registered adapter receives them from the logger) |
+| `purgeConfirmationThreshold` | `number`             | `10 000`                               | Impacted rows (logs + attrs) at/above which [`purge`](#purge--asynchronous-with-confirmation) waits for `confirmPurge`        |
+| `purgeBatchSize` | `number`                         | `1 000`                                | Logs deleted per background purge batch                                                                                       |
+| `purgeLockTtlMs` | `number`                         | `60 000`                               | TTL on a purge job's processing lock (heartbeat-extended); a dead instance's jobs become sweepable after it lapses           |
+| `purgeSweepIntervalMs` | `number`                   | `60 000`                               | Interval between automatic `sweepPurgeJobs()` runs; `0` disables                                                             |
+| `purgeJobRetentionMs`  | `number`                   | `86 400 000` (24 h)                    | How long terminal (completed / failed) purge job rows are kept before the sweep prunes them; `0` keeps them forever          |
+
+`db` may be typed `Kysely<LoggerTables>` (exported from `@campfhir/bored-logs/adapters/psql`) for full type-safety on the logger tables. `encrypt`/`decrypt` handle **at-rest** attribute encryption in Postgres — distinct from the [end-to-end wire encryption](#end-to-end-payload-encryption) between shipper and server.
 
 ### `ConsoleAdapter` options
 
@@ -1395,7 +1405,7 @@ import { queryLogs } from "@/actions/logs";
 
 **Autocomplete behaviour** (requires `logs` prop):
 
-- Typing a partial key shows matching key suggestions. The built-in fields (`timestamp`, `level`, `message`) are always offered, listed first, and tagged (`data-kind="builtin"` plus an `aria-hidden` "built-in" label) so it's clear you're picking the built-in field rather than a same-named attribute — a colliding attribute of the same name is not shown twice. Attribute keys carry `data-kind="attribute"`. Group-aware — fires on the term after `(`, `||`, `&&`.
+- Typing a partial key shows matching key suggestions. The built-in fields (`$timestamp`, `$level`, `$message`) are always offered, listed first, and tagged (`data-kind="builtin"` plus an `aria-hidden` "built-in" label) so it's clear you're picking the built-in column; a same-named attribute (e.g. an attribute literally called `level`) is offered as its own separate `data-kind="attribute"` entry, since the `$` sigil keeps the two unambiguous. Group-aware — fires on the term after `(`, `||`, `&&`.
 - After `key:`, operator suggestions appear (`'`, `='`, `!'`, `!='`, `>'`, `>='`, `<'`, `<='`).
 - After `key:'`, value suggestions show unique values for that key from `logs`.
 - **Tab** cycles through suggestions; **Enter** accepts the highlighted suggestion (or commits if none selected); **Escape** dismisses suggestions for the current stage.
@@ -1403,7 +1413,7 @@ import { queryLogs } from "@/actions/logs";
 - Escape on value stage: suppresses suggestions for that value; resets when the token is committed.
 - Operator stage suggestions are never suppressed by Escape.
 
-> **Note — built-in fields.** `$timestamp`, `$level`, and `$message` map to real `logs` columns rather than stored attributes (see [Built-in fields](#built-in-fields)); the autocomplete tags them `builtin` and lists them first. Because of the `$` sigil, a same-named attribute is offered as its own separate entry. `$level:` in the search bar matches the level column, but it's an **exact** match — for severity thresholds ("warn and above") prefer [`LogLevelFilter`](#loglevelfilter) with `query({ levels })`, which expands to a level set. The demo lifts `level:` terms out of the tree into the dedicated level filter for exactly this reason.
+> **Note — built-in fields.** `$timestamp`, `$level`, and `$message` map to real `logs` columns rather than stored attributes (see [Built-in fields](#built-in-fields)); the autocomplete tags them `builtin` and lists them first. Because of the `$` sigil, a same-named attribute is offered as its own separate entry. Severity thresholds work right in the search bar — `$level:>='warn'` is "warn and above" (see [Built-in fields](#built-in-fields)) — or via the dedicated [`LogLevelFilter`](#loglevelfilter) + `query({ levels })` when you want the level filter as a separate UI control.
 
 ### `LogLevelFilter`
 
@@ -1702,6 +1712,11 @@ pnpm demo:down   # stop and wipe it
 
 See the [demo README](https://github.com/campfhir/bored-logs/blob/main/demos/web/README.md)
 for running it locally without Docker.
+
+A second demo, [`demos/shipping/`](https://github.com/campfhir/bored-logs/tree/main/demos/shipping),
+runs the [cross-application shipping](#shipping-logs-between-applications) topology across two
+runtimes — a **Deno** worker sealing end-to-end-encrypted batches to a **Node + Express** log
+server — proving the library's runtime-agnostic wire path and the encrypt/register/verify flow.
 
 ### Live end-to-end tests
 
