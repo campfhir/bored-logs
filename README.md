@@ -674,7 +674,7 @@ export async function purgeStatus(id: string) {
 | `sort`             | `"asc" \| "desc"`   | `"desc"`       | Sort direction                                             |
 | `attributeFilter`  | `FilterExpr`        | —              | Boolean filter tree (`\|\|` / `&&` / grouping) from `parseLogQueryExpr` |
 
-`attributeFilter` is the single filter input: a boolean tree (supports OR/grouping) that matches attributes, the `message` column, and the built-in `timestamp` / `level` columns. It is ANDed with the timestamp range, level filter, and `message` option. Build it with `parseLogQueryExpr`; see [Log search](#log-search).
+`attributeFilter` is the single filter input: a boolean tree (supports OR/grouping) that matches stored attributes (including [nested paths](#nested-attribute-paths)) and the `$`-prefixed built-in columns (`$message`, `$timestamp`, `$level` — see [Built-in fields](#built-in-fields)). It is ANDed with the timestamp range, level filter, and `message` option. Build it with `parseLogQueryExpr` or the [query builder](#programmatic-query-builder); see [Log search](#log-search).
 
 `level`, `levels`, and `minLevel` are mutually exclusive — the type makes combining them a compile-time error. Omit all three to query every level. `minLevel` uses the same ranking as the emit gate (lower rank = more severe): `minLevel: "warn"` yields `warn`, `error`, `critical`; `minLevel: "debug"` yields everything. These fields are typed as `LogLevel` (`keyof LogLevels`) — to pass a custom level here, augment the `LogLevels` interface (see [Custom levels](#custom-levels)). An unknown level name still returns an `Err("invalid log level")` at runtime.
 
@@ -725,18 +725,21 @@ Deletes all matching records with no record-count limit. Uses a single `DELETE �
 
 ### Filter leaves (`LogQueryToken`)
 
-The `FilterExpr` tree passed to `attributeFilter` is built from comparison leaves:
+The `FilterExpr` tree passed to `attributeFilter` is built from comparison leaves. You rarely construct these by hand — `parseLogQueryExpr` (from a query string) and the [query builder](#programmatic-query-builder) produce them — but the shape is:
 
 ```typescript
 type LogQueryToken = {
-  key: string;
+  key: string;                                          // "$message" when no key was given
   operator: "contains" | "=" | ">" | ">=" | "<" | "<=";
   value: string;
-  negated?: boolean;
+  negated?: boolean;      // NOT — combines with any operator (`key:!='x'`, `key:!>'5'`)
+  literalKey?: boolean;   // a quoted key that IS a valid path → treat as a flat name, not a path
+  nullValue?: boolean;    // bare `null`/`NULL` → the null literal (value normalized to "null")
+  cast?: "string";        // `::string` → force lexicographic comparison (see below)
 };
 ```
 
-Comparison operators (`>`, `>=`, `<`, `<=`) dispatch on the **filter value's** shape, and each branch only compares against compatibly-typed stored values:
+Negation composes with every operator, including the comparisons (`key:!>'5'`, `key:!<='x'`). Comparison operators (`>`, `>=`, `<`, `<=`) dispatch on the **filter value's** shape, and each branch only compares against compatibly-typed stored values:
 
 | Filter value looks like | Comparison | Participating rows |
 | --- | --- | --- |
