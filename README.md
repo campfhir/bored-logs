@@ -24,6 +24,7 @@ Structured PostgreSQL-backed logging for React + Node — custom adapter-based l
   - [`createLogIngestHandler` options](#createlogingesthandler-options)
   - [Next.js and console output](#nextjs-and-console-output)
 - [Shipping logs between applications](#shipping-logs-between-applications)
+  - [End-to-end payload encryption](#end-to-end-payload-encryption)
 - [Log search](#log-search)
 - [UI components](#ui-components)
   - [LogTable](#logtable)
@@ -986,6 +987,44 @@ export async function POST(req: Request): Promise<Response> {
 - **Custom levels** must be registered on both sides (`createLogger({ levels })`) so gating and query defaults recognise them.
 - **Timestamps are the shipper's** — records carry the original event time, not arrival time.
 - **Batch size negotiates itself** — every ingest response advertises the server's `maxBatch` via the `x-log-max-batch` header. The `HttpAdapter` learns it, chunks future shipments to fit, and recovers from a 413 *within the same flush* by re-sending in smaller chunks (halving against an older server without the header). An outage backlog larger than the server's limit therefore drains in sequential chunks instead of wedging the queue — no need to align `batchSize` and `maxBatch` by hand.
+
+### End-to-end payload encryption
+
+Opt in to encrypting the shipment itself — beyond TLS — so the payload is opaque to TLS-terminating proxies and logging middleboxes, and every batch is **cryptographically signed by the shipping client**:
+
+```typescript
+// Shipper — one option:
+new HttpAdapter({
+  endpoint: "https://logs.example.com/api/logs",
+  headers: { authorization: `Bearer ${token}` }, // still sent (auth) — see TOFU note
+  encryption: {},                                 // ← that's it
+});
+
+// Log server — a shared context feeds both handlers:
+import {
+  createE2EServerContext, createLogIngestHandler, createLogRegistrationHandler,
+} from "@campfhir/bored-logs/server";
+
+const e2e = createE2EServerContext();
+export const POST = createLogIngestHandler({ logger, encryption: { context: e2e } });
+// mounted at <endpoint>/register (the adapter's default guess):
+export const registerPOST = createLogRegistrationHandler(e2e);
+```
+
+**How it works (v1 suite `ecdh-p256+a256gcm+ecdsa-p256`):** on first flush the adapter registers itself — it sends its ECDSA P-256 public signing key, the server answers with its ECDH P-256 public encryption key. Each POST then derives a fresh AES-256-GCM key (ephemeral ECDH + HKDF — single-use, so IV reuse is structurally impossible), ships the **ciphertext as the raw request body**, and carries the envelope in `x-bored-logs-*` headers (`algo`, `client`, `key`, `iv`, `ts`, `nonce`, `sig`). The signature covers every envelope field *and* the ciphertext, so stripping, reordering, algo-downgrade, or clientId substitution all fail verification. The server verifies the signature **first**, then enforces freshness (`clockSkewMs`, default 5 min) and replay protection (per-client nonce cache), then decrypts into the normal ingest pipeline. Plaintext shipping is untouched unless you set `required: true`, which rejects it with `400 encryption-required`.
+
+**Self-healing:** the default registration store is in-memory — a server restart forgets clients. The server answers `401` + `x-bored-logs-error: unknown-client` (or `decrypt-failed` after a key rotation), and the adapter transparently re-registers and re-sends the same batch, in order. Persist across restarts with `await e2e.exportKeys()` → pass back as `keys`, and/or implement `E2ERegistrationStore` against your database. Give shippers a persistent identity via `generateE2ESigningKeys()` → `encryption: { clientId, signingKeys }`.
+
+**What to know before relying on it:**
+
+- **Registration is trust-on-first-use, last-write-wins.** Anyone who can reach the registration endpoint can claim a clientId — front it with the same auth as ingest (the adapter sends its `headers`/`credentials` there too).
+- **TLS stays on.** This is defense-in-depth: a compromise of the server's static key decrypts captured traffic (client ephemerals only protect against *client* compromise). Rotate via `exportKeys`/`keys` — clients recover automatically.
+- **Unload never downgrades.** `sendBeacon` can't carry the envelope, so the unload tail goes through an async seal + keepalive fetch; records that can't be sealed are **dropped, never sent in the clear** (reported via `onError`).
+- `encryption` + `transport` throws — a custom transport would receive plaintext.
+- Requires WebCrypto (`crypto.subtle`): browsers need a secure context (https/localhost); Node ≥ 18, Deno, and Edge runtimes are covered.
+- Batch-size negotiation, `secure()`/`redact()` semantics, and every response shape are unchanged.
+
+In the browser, the same option threads through the provider: `<LoggerProvider endpoint="/api/logs" encryption={{}} />`.
 
 A runnable two-process version of this exact topology lives in [`demos/shipping/`](demos/shipping/); the [web demo](demos/web/) exercises the same pipeline with the browser as the shipping "app"; a Node service differs only in construction (`HttpAdapter` added by hand, flush wired to process exit instead of page unload).
 

@@ -87,6 +87,13 @@ export type LoggerProviderProps = {
   redactPlaceholder?: string;
   /** Called when a flush fails; the failed batch is re-queued for retry. */
   onError?: (err: unknown, logs: ClientLogRecord[]) => void;
+  /**
+   * Opt-in end-to-end shipment encryption (see the HttpAdapter `encryption`
+   * option): batches are encrypted + signed, registration is automatic, and
+   * on unload records are dropped rather than ever sent in the clear.
+   * Incompatible with `transport`.
+   */
+  encryption?: HttpAdapterOptions["encryption"];
 
   // ── Extra adapters ──────────────────────────────────────────────────────────
   /** Additional adapters to register on the client logger (registered after console + shipping). */
@@ -111,6 +118,7 @@ function shipOptionsFrom(props: LoggerProviderProps): HttpAdapterOptions {
     redactPlaceholder: props.redactPlaceholder,
     onError: props.onError,
     levels: props.levels,
+    encryption: props.encryption,
   };
 }
 
