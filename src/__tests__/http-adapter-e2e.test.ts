@@ -193,20 +193,26 @@ describe("HttpAdapter — end-to-end encryption", () => {
       assertNoPlaintextShipment(server.calls);
     });
 
-    it("drops (never downgrades) when the session is not yet registered", async () => {
+    it("drops (never downgrades) when the session cannot register", async () => {
       const sendBeacon = vi.fn(() => true);
       vi.stubGlobal("navigator", { sendBeacon });
       const onError = vi.fn();
 
+      // Registration is unreachable — the write-triggered warm-up fails, so
+      // the session is genuinely unready when the page unloads.
+      server.fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+
       const adapter = makeAdapter({ onError });
       adapter.write(rec({ message: "doomed", template: "doomed" }));
-      adapter.flushBeacon(); // no prior flush — session unready
+      adapter.flushBeacon();
 
       await new Promise((r) => setTimeout(r, 30));
       expect(sendBeacon).not.toHaveBeenCalled();
-      expect(server.calls).toHaveLength(0); // nothing sent AT ALL
+      // Only (failed) registration attempts — the record itself never left.
+      expect(server.shipments()).toHaveLength(0);
       expect(onError).toHaveBeenCalled(); // the drop is reported
       expect(adapter.pending).toBe(0); // dropped, not queued (page is going away)
+      assertNoPlaintextShipment(server.calls);
     });
   });
 });
@@ -291,5 +297,18 @@ describe("HttpAdapter — E2E risk mitigations", () => {
     assertNoPlaintextShipment(server.calls);
     // One registration attempt for this flush — no hot loop.
     expect(server.registrations()).toHaveLength(1);
+  });
+  it("first write() also warms the session — services that never call start() still pre-register", async () => {
+    const adapter = new HttpAdapter({
+      endpoint: "https://logs.example/api/logs",
+      flushInterval: 0,
+      batchSize: 1000, // no size-triggered flush
+      encryption: {},
+    });
+    adapter.write(rec());
+    await vi.waitFor(() => {
+      expect(server.registrations()).toHaveLength(1);
+    });
+    expect(server.shipments()).toHaveLength(0); // registered, nothing shipped yet
   });
 });

@@ -71,7 +71,8 @@ export type HttpAdapterOptions = {
    * (ECDH P-256 → HKDF → AES-256-GCM, fresh ephemeral key per POST) and
    * signed (ECDSA P-256); the ciphertext ships as the raw body with the
    * envelope in `x-bored-logs-*` headers. The adapter registers itself at
-   * the registration endpoint on first flush and transparently re-registers
+   * the registration endpoint eagerly (at `start()` or the first `write`,
+   * whichever comes first) and transparently re-registers
    * when the server forgets it (restart) or rotates its key. Incompatible
    * with `transport` (which would receive plaintext) — combining them throws.
    * On page unload, `sendBeacon` is never used; records that cannot be
@@ -138,6 +139,18 @@ export class HttpAdapter implements LogAdapter {
     return this._opts.endpoint;
   }
 
+  /**
+   * Kick off (or join) the E2E registration in the background. Errors are
+   * routed to `onError`; the actual flush path re-awaits `ensureRegistered`
+   * and gets its own error handling.
+   */
+  private _warmE2E(): void {
+    if (!this._opts.encryption) return;
+    const session = this._session();
+    if (session.isReady) return;
+    void session.ensureRegistered().catch((err) => this._opts.onError?.(err, []));
+  }
+
   /** The E2E session for the current options (created on first use). */
   private _session(): E2EClientSession {
     if (!this._e2e) {
@@ -169,6 +182,9 @@ export class HttpAdapter implements LogAdapter {
 
   /** Level-gate, convert to the wire form, and enqueue the record; flushes early once the batch fills. */
   write(record: LogRecord): void {
+    // Services typically never call start() — warming here means the session
+    // registers as soon as the first record exists, well before any flush.
+    this._warmE2E();
     const recordNum = this._levels[record.level.toLowerCase()] ?? this._levels.debug;
     const thresholdNum =
       this._levels[(this._opts.level ?? DEFAULTS.level).toLowerCase()] ??
@@ -417,11 +433,7 @@ export class HttpAdapter implements LogAdapter {
     // Warm the E2E session immediately: registering now (instead of at the
     // first flush) means the session is almost always ready by the time an
     // unload flush needs to seal — shrinking the drop-on-unload window.
-    if (this._opts.encryption) {
-      void this._session()
-        .ensureRegistered()
-        .catch((err) => this._opts.onError?.(err, []));
-    }
+    this._warmE2E();
     const interval = this._opts.flushInterval ?? DEFAULTS.flushInterval;
     if (interval > 0 && typeof setInterval === "function") {
       this._timer = setInterval(() => {

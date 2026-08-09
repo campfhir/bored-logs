@@ -38,9 +38,9 @@ const ship = new HttpAdapter({
   flushInterval: 1000,
   // End-to-end encryption: batches are sealed (ECDH → AES-GCM) and signed
   // (ECDSA) before leaving this process — the wire carries only ciphertext
-  // plus the x-bored-logs-* envelope. Registration happens automatically on
-  // the first flush; if the log server restarts, the adapter transparently
-  // re-registers. Runs on Deno's WebCrypto — same code as browser/Node/Edge.
+  // plus the x-bored-logs-* envelope. Registration happens eagerly (start()
+  // below / the first write); if the log server restarts, the adapter
+  // transparently re-registers. Deno's WebCrypto — same code as browser/Node/Edge.
   encryption: { clientId: "app-a", signingKeys: await loadOrCreateSigningKeys() },
   onError: (err) => console.error("[app-a] log shipment failed:", err),
 });
@@ -52,6 +52,8 @@ const logger = createLogger({
 });
 logger.addAdapter(new ConsoleAdapter({ showTimestamp: false }));
 logger.addAdapter(ship);
+// start() arms the flushInterval timer AND warms the E2E registration.
+const stopShipping = ship.start();
 
 // Flush the queue before the process goes away.
 Deno.addSignalListener("SIGINT", async () => {
@@ -93,4 +95,5 @@ for (let i = 1; i <= ORDERS; i++) {
 await logger.flush();
 logger.info("app-a done — {n} orders processed", { n: ORDERS });
 await logger.flush();
+stopShipping();
 Deno.exit(0);
