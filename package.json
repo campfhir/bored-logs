@@ -1,6 +1,6 @@
 {
   "name": "@campfhir/bored-logs",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Structured PostgreSQL-backed logging for React + Node \u2014 adapter-based logger, typed message templates, boolean log search with nested-attribute queries, HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
