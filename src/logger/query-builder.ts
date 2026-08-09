@@ -193,7 +193,11 @@ export function where(key: string): WhereClause {
  * `where("a.b")` would walk into object `a`.
  */
 export function literal(key: string): WhereClause {
-  return new WhereClause(key, true);
+  // The literal flag only means something when the key IS a valid path (bare,
+  // it would be walked as one). For a non-path key `literal()` and `where()`
+  // are identical — stamping an inert flag would make `toQueryString()`
+  // round-trip to a different tree, since the parser only flags valid paths.
+  return new WhereClause(key, parseAttrPath(key) !== null);
 }
 
 // ---------------------------------------------------------------------------

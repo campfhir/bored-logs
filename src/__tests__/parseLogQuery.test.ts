@@ -635,3 +635,39 @@ describe("::string value cast", () => {
     expect(parseLogQuery(formatToken(token))[0]).toEqual(token);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regressions found by fuzzing (src/__tests__/fuzz.test.ts) — format→parse
+// asymmetries. Each fails on the pre-fix parser/formatter.
+// ---------------------------------------------------------------------------
+
+describe("formatToken / parse symmetry (fuzz regressions)", () => {
+  it("parses negated comparison operators (!<, !>, !<=, !>=)", () => {
+    expect(parseLogQuery("k:!<'5'")[0]).toEqual({ key: "k", operator: "<", value: "5", negated: true });
+    expect(parseLogQuery("k:!>='5'")[0]).toEqual({ key: "k", operator: ">=", value: "5", negated: true });
+    // …and round-trips a negated-comparison token that formatToken emits.
+    for (const op of ["<", ">", "<=", ">="] as const) {
+      const token = { key: "k", operator: op, value: "5", negated: true };
+      expect(parseLogQuery(formatToken(token))[0]).toEqual(token);
+    }
+  });
+
+  it("escapes backslash and quote in a bare $message value", () => {
+    for (const value of [">,13\\", 'has"quote', "back\\slash", 'both"\\here']) {
+      const token = { key: "$message", operator: "contains" as const, value };
+      expect(parseLogQuery(formatToken(token))[0].value).toBe(value);
+    }
+  });
+
+  it("escapes backslash in a quoted key", () => {
+    const token = { key: "weird\\key", operator: "contains" as const, value: "v" };
+    expect(parseLogQuery(formatToken(token))[0].key).toBe("weird\\key");
+  });
+
+  it("only flags literalKey for a quoted key that is a valid path", () => {
+    // A quoted key that isn't a valid path carries no inert flag.
+    expect(parseLogQuery("',a.':'v'")[0]).not.toHaveProperty("literalKey");
+    // A quoted valid path IS flagged literal.
+    expect(parseLogQuery("'a.b':'v'")[0]).toMatchObject({ literalKey: true });
+  });
+});

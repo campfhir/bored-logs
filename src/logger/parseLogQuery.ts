@@ -292,15 +292,17 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
   // Consume the ':'
   cur.i++;
 
-  // Read optional operator suffix: =, !, !=, >, >=, <, <=
+  // Read optional operator suffix. A leading `!` negates; it may stand alone
+  // (negated contains) or prefix any comparison operator (`!=`, `!>`, `!>=`,
+  // `!<`, `!<=`) — symmetric with formatToken, which emits those forms.
   let operator: LogQueryOperator = "contains";
   let negated: boolean | undefined;
+  if (cur.i < cur.input.length && cur.input[cur.i] === "!") {
+    negated = true;
+    cur.i++;
+  }
   if (cur.i < cur.input.length) {
-    if (cur.input[cur.i] === "!" && cur.input[cur.i + 1] === "=") {
-      operator = "="; negated = true; cur.i += 2;
-    } else if (cur.input[cur.i] === "!") {
-      negated = true; cur.i++;
-    } else if (cur.input[cur.i] === "=") {
+    if (cur.input[cur.i] === "=") {
       operator = "="; cur.i++;
     } else if (cur.input[cur.i] === ">" && cur.input[cur.i + 1] === "=") {
       operator = ">="; cur.i += 2;
@@ -311,7 +313,7 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
     } else if (cur.input[cur.i] === "<") {
       operator = "<"; cur.i++;
     }
-    // else: stays "contains", next char should be quote
+    // else: stays "contains" (bare `!` = negated contains); next char is the value
   }
 
   // Now read the value — quoted or bare word
@@ -342,10 +344,13 @@ function parseFilter(cur: Cursor): LogQueryToken | null {
 
   if (value !== null) {
     const token: LogQueryToken = { key, operator, value, negated };
-    // A quoted key containing path characters is a literal flat name; a bare
-    // dotted/bracketed key means a path. The flag is only set when it is
-    // load-bearing, so plain quoted keys keep their existing token shape.
-    if (keyWasQuoted && /[.[]/.test(key)) token.literalKey = true;
+    // A quoted key that IS a valid attribute path means "treat this path
+    // literally as a flat name" — bare, the same key would be a path. The flag
+    // is set only when load-bearing: for a quoted key that isn't a valid path
+    // (parseAttrPath null) it would be inert (buildLeaf computes the same null
+    // path either way), and setting it would break format→parse symmetry,
+    // since formatToken must also quote keys carrying `'`/`\`/spaces.
+    if (keyWasQuoted && parseAttrPath(key) !== null) token.literalKey = true;
     // A BARE null/NULL is the null literal; a quoted 'null' stays the string.
     // The flag is set for every operator so the expression parser can reject
     // ordered forms (`key:>null`) as a syntax error — ordering against null
@@ -680,8 +685,12 @@ export function isUnsatisfiable(expr: FilterExpr | null): boolean {
 export function formatToken(token: LogQueryToken): string {
   const isMessage = token.key === "$message" || token.key === "$msg";
   if (isMessage && token.operator === "contains") {
-    // bare message terms have no key prefix; negated ones show message:!'...'
-    if (!token.negated) return `"${token.value}"`;
+    // Bare message terms have no key prefix; negated ones fall through to the
+    // keyed form below. Escape `\` and the wrapping `"` so a value containing
+    // either re-parses to the same text.
+    if (!token.negated) {
+      return `"${token.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    }
   }
   // Build operator string with inline negation
   let opStr: string;
@@ -694,8 +703,8 @@ export function formatToken(token: LogQueryToken): string {
   // a literal flat name containing path characters (quoting is what marks it
   // literal — a bare dotted key would re-parse as a path).
   const key =
-    token.literalKey || /[\s:'"=<>!]/.test(token.key)
-      ? `'${token.key.replace(/'/g, "\\'")}'`
+    token.literalKey || /[\s:'"=<>!\\]/.test(token.key)
+      ? `'${token.key.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
       : token.key;
   // A null literal renders as the bare word so it re-parses with nullValue;
   // the string "null" keeps the quotes that distinguish it.

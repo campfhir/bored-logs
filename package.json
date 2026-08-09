@@ -1,7 +1,7 @@
 {
   "name": "@campfhir/bored-logs",
   "version": "0.7.0",
-  "description": "Structured PostgreSQL-backed logging for Next.js — custom logger, adapter architecture, React UI components, and DB migration.",
+  "description": "Structured PostgreSQL-backed logging for Next.js \u2014 custom logger, adapter architecture, React UI components, and DB migration.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -85,6 +85,7 @@
     "prepublishOnly": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:fuzz": "FUZZ_ITER=8000 vitest run src/__tests__/fuzz.test.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "bench": "vitest bench --run",
     "bench:e2e": "vitest bench --run --config vitest.e2e.config.ts",

@@ -235,3 +235,18 @@ describe("$level severity ranges", () => {
     if (reparsed.ok) expect(reparsed.val).toEqual(b.build());
   });
 });
+
+describe("literal() precision (fuzz regression)", () => {
+  it("does not stamp an inert literalKey on a non-path key", () => {
+    // literal() and where() are identical for a flat key; no inert flag, so
+    // toQueryString() round-trips.
+    expect(literal("plainkey").eq("x").build()).toEqual(where("plainkey").eq("x").build());
+    const b = literal("plainkey").eq("x");
+    const reparsed = parseLogQueryExpr(b.toQueryString());
+    expect(reparsed.ok && reparsed.val).toEqual(b.build());
+  });
+
+  it("still stamps literalKey on a valid-path key", () => {
+    expect(literal("a.b").eq("x").build()).toEqual(q(f("a.b", "=", "x", { literalKey: true })));
+  });
+});
