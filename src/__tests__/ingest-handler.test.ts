@@ -236,3 +236,56 @@ describe("createLogIngestHandler — authorize hook", () => {
     expect(onError).toHaveBeenCalledWith(expect.any(Error), expect.any(Request));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nothing consumer-supplied may crash the handler.
+// ---------------------------------------------------------------------------
+
+describe("createLogIngestHandler — fault containment", () => {
+  it("a throwing registration store during decrypt answers 500, never rejects", async () => {
+    const { createE2EServerContext } = await import("../server/e2e-context");
+    const ctx = createE2EServerContext({
+      store: {
+        get: async () => {
+          throw new Error("db down");
+        },
+        set: async () => {},
+        delete: async () => {},
+      },
+    });
+    const onError = vi.fn();
+    const handler = createLogIngestHandler({
+      logger: createLogger(),
+      onError,
+      encryption: { context: ctx },
+    });
+    // A shape-valid envelope, so open() gets past header validation and
+    // reaches the (throwing) store lookup.
+    const { E2E_HEADERS, toBase64Url, randomBytes } = await import("../adapters/http/e2e-wire");
+    const req = post({ logs: [] });
+    req.headers.set(E2E_HEADERS.algo, "ecdh-p256+a256gcm+ecdsa-p256");
+    req.headers.set(E2E_HEADERS.client, "some-client");
+    req.headers.set(E2E_HEADERS.ts, String(Date.now()));
+    req.headers.set(E2E_HEADERS.nonce, toBase64Url(randomBytes(16)));
+    req.headers.set(E2E_HEADERS.key, toBase64Url(randomBytes(65)));
+    req.headers.set(E2E_HEADERS.iv, toBase64Url(randomBytes(12)));
+    req.headers.set(E2E_HEADERS.sig, toBase64Url(randomBytes(64)));
+    const res = await handler(req); // must NOT reject
+    expect(res.status).toBe(500);
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("a throwing user onError cannot escape the handler", async () => {
+    const handler = createLogIngestHandler({
+      logger: createLogger(),
+      onError: () => {
+        throw new Error("reporter is broken too");
+      },
+      authorize: () => {
+        throw new Error("auth backend down");
+      },
+    });
+    const res = await handler(post({ logs: [wireRecord()] })); // must NOT reject
+    expect(res.status).toBe(500);
+  });
+});

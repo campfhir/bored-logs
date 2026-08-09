@@ -112,11 +112,19 @@ export function createLogIngestHandler(
   options: LogIngestHandlerOptions,
 ): (request: Request) => Promise<Response> {
   const maxBatch = options.maxBatch ?? 100;
-  const onError =
+  const rawOnError =
     options.onError ??
-    ((err) => {
+    ((err: unknown) => {
       console.error("[bored-logs] log ingest failed:", err);
     });
+  // A throwing error-reporter must never take down the flow it reports on.
+  const onError = (err: unknown, request: Request): void => {
+    try {
+      rawOnError(err, request);
+    } catch {
+      // nowhere left to report
+    }
+  };
 
   return async function handler(request: Request): Promise<Response> {
     if (request.method !== "POST") {
@@ -152,7 +160,16 @@ export function createLogIngestHandler(
     const isEncrypted = request.headers.get(E2E_HEADERS.algo) !== null;
     if (isEncrypted && options.encryption) {
       // Verify + decrypt BEFORE any body parsing (a Request body reads once).
-      const opened = await options.encryption.context.open(request);
+      // open() itself can reject on infrastructure failures (a throwing
+      // registration store, a broken body stream, bad server keys) — contain
+      // them as a 500 rather than crashing the route.
+      let opened: Awaited<ReturnType<typeof options.encryption.context.open>>;
+      try {
+        opened = await options.encryption.context.open(request);
+      } catch (err) {
+        onError(err, request);
+        return jsonError(500, "failed to ingest logs");
+      }
       if (!opened.ok) {
         return new Response(JSON.stringify({ error: opened.code }), {
           status: opened.status,

@@ -299,3 +299,35 @@ describe("HttpAdapter — batch-size negotiation", () => {
     expect(adapter.pending).toBe(4); // nothing lost, order preserved
   });
 });
+
+// ---------------------------------------------------------------------------
+// A throwing user onError must never escape the adapter.
+// ---------------------------------------------------------------------------
+
+describe("HttpAdapter — onError fault containment", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("flush() resolves (and re-queues) even when onError itself throws", async () => {
+    const adapter = new HttpAdapter({
+      endpoint: "/logs",
+      flushInterval: 0,
+      onError: () => {
+        throw new Error("reporter is broken");
+      },
+    });
+    adapter.write(rec());
+    await expect(adapter.flush()).resolves.toBeUndefined(); // must NOT reject
+    expect(adapter.pending).toBe(1); // still re-queued
+  });
+});

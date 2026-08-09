@@ -909,6 +909,16 @@ export class PostgresAdapter implements QueryableLogAdapter {
     this._level = value;
   }
 
+  /** Invoke the user's onWarning, containing a throwing hook — a broken
+   * warning callback must not abort (and endlessly re-queue) a write batch. */
+  private _warn(warning: AdapterWarning): void {
+    try {
+      this._onWarning?.(warning);
+    } catch {
+      // a broken warning hook has nowhere left to report
+    }
+  }
+
   /** Merges additional custom level ranks into the adapter's level map. */
   setLevels(levels: Record<string, number>): void {
     Object.assign(this._levels, levels);
@@ -1684,7 +1694,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
           }
         }
         if (oversizedKeys.length > 0) {
-          this._onWarning?.({
+          this._warn({
             type: "attr_keys_truncated",
             keys: oversizedKeys,
             limit: this.MAX_ATTR_KEY_LENGTH,
@@ -1723,7 +1733,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
             // actually stores — not JS string length.
             const byteLength = Buffer.byteLength(val, "utf-8");
             if (byteLength > this.MAX_BLOB_VAL_LENGTH) {
-              this._onWarning?.({
+              this._warn({
                 type: "attr_value_truncated",
                 key: key.slice(0, 40),
                 length: byteLength,

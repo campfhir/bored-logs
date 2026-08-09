@@ -148,7 +148,7 @@ export class HttpAdapter implements LogAdapter {
     if (!this._opts.encryption) return;
     const session = this._session();
     if (session.isReady) return;
-    void session.ensureRegistered().catch((err) => this._opts.onError?.(err, []));
+    void session.ensureRegistered().catch((err) => this._notifyError(err, []));
   }
 
   /** The E2E session for the current options (created on first use). */
@@ -171,6 +171,15 @@ export class HttpAdapter implements LogAdapter {
   }
   private get _maxQueue(): number {
     return this._opts.maxQueue ?? DEFAULTS.maxQueue;
+  }
+
+  /** Invoke the user's onError, containing a throwing reporter. */
+  private _notifyError(err: unknown, logs: ClientLogRecord[]): void {
+    try {
+      this._opts.onError?.(err, logs);
+    } catch {
+      // a broken error-reporter has nowhere left to report
+    }
   }
 
   /** The number of records currently buffered (before the next flush). */
@@ -235,7 +244,7 @@ export class HttpAdapter implements LogAdapter {
       } catch (err) {
         const room = Math.max(0, this._maxQueue - this._queue.length);
         if (room > 0) this._queue.unshift(...batch.slice(0, room));
-        this._opts.onError?.(err, batch);
+        this._notifyError(err, batch);
       }
       return;
     }
@@ -305,10 +314,7 @@ export class HttpAdapter implements LogAdapter {
           if ((this._serverMaxBatch ?? 0) < 1) {
             // Even a single record bounces — nothing smaller to try.
             this._serverMaxBatch = 1;
-            this._opts.onError?.(
-              new Error(`[bored-logs] log shipment failed: HTTP 413`),
-              batch,
-            );
+            this._notifyError(new Error(`[bored-logs] log shipment failed: HTTP 413`), batch);
             return;
           }
           continue;
@@ -320,7 +326,7 @@ export class HttpAdapter implements LogAdapter {
         // Re-queue at the front so the next flush retries, without exceeding the cap.
         const room = Math.max(0, this._maxQueue - this._queue.length);
         if (room > 0) this._queue.unshift(...batch.slice(0, room));
-        this._opts.onError?.(err, batch);
+        this._notifyError(err, batch);
         return;
       }
     }
@@ -392,7 +398,7 @@ export class HttpAdapter implements LogAdapter {
         keepalive: true,
       }).catch(() => {});
     } catch (err) {
-      this._opts.onError?.(err, batch);
+      this._notifyError(err, batch);
     }
   }
 

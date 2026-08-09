@@ -556,3 +556,34 @@ describe("registration authorize hook — throw semantics", () => {
     expect(onError).toHaveBeenCalled();
   });
 });
+
+describe("registration handler — fault containment", () => {
+  it("a throwing store answers 500, never rejects", async () => {
+    const ctx = createE2EServerContext({
+      store: {
+        get: async () => {
+          throw new Error("db down");
+        },
+        set: async () => {
+          throw new Error("db down");
+        },
+        delete: async () => {},
+      },
+    });
+    const onError = vi.fn();
+    const handler = createLogRegistrationHandler(ctx, { onError });
+    const signing = await generateEcdsaKeyPair();
+    const res = await handler(
+      new Request("http://x/register", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: "x",
+          algo: E2E_ALGO_V1,
+          signingKey: await crypto.subtle.exportKey("jwk", signing.publicKey),
+        }),
+      }),
+    ); // must NOT reject
+    expect(res.status).toBe(500);
+    expect(onError).toHaveBeenCalled();
+  });
+});

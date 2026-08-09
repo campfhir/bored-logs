@@ -34,11 +34,19 @@ export function createLogRegistrationHandler(
   context: E2EServerContext,
   options: LogRegistrationHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
-  const onError =
+  const rawOnError =
     options.onError ??
     ((err: unknown) => {
       console.error("[bored-logs] log registration failed:", err);
     });
+  // A throwing error-reporter must never take down the flow it reports on.
+  const onError = (err: unknown, request: Request): void => {
+    try {
+      rawOnError(err, request);
+    } catch {
+      // nowhere left to report
+    }
+  };
 
   return async function handler(request: Request): Promise<Response> {
     if (request.method !== "POST") {
@@ -83,11 +91,22 @@ export function createLogRegistrationHandler(
       );
     }
 
-    const result = await context.registerClient({
-      clientId,
-      algo,
-      signingKey: signingKey as JsonWebKey,
-    });
+    // registerClient can reject on infrastructure failures (a throwing
+    // registration store, bad server keys) — contain them as a 500.
+    let result: Awaited<ReturnType<typeof context.registerClient>>;
+    try {
+      result = await context.registerClient({
+        clientId,
+        algo,
+        signingKey: signingKey as JsonWebKey,
+      });
+    } catch (err) {
+      onError(err, request);
+      return new Response(JSON.stringify({ error: "registration failed" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (!result.ok) {
       // A key-continuity conflict is the caller's misconfiguration (or an
       // attempted takeover) — 409, distinct from validation errors.

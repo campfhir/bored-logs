@@ -269,3 +269,30 @@ describe("PostgresAdapter — attribute key size (byte-bounded)", () => {
     expect(warnings).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A throwing onWarning must not poison the write batch (it would re-queue
+// and retry the same batch forever).
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter — onWarning fault containment", () => {
+  it("commits the batch even when onWarning throws", async () => {
+    const cap = makeCapturingDb();
+    const adapter = new PostgresAdapter({
+      db: cap.db,
+      onWarning: () => {
+        throw new Error("warning hook is broken");
+      },
+    });
+    // An oversized KEY triggers attr_keys_truncated during the batch write.
+    adapter.write(baseRecord({ ["k".repeat(2000)]: "v", ok: "small" }));
+    await adapter.flush();
+    await adapter.flush(); // a poisoned batch would have been re-queued and retried
+
+    // Exactly ONE logs insert: the batch committed on the first flush and was
+    // NOT re-queued by a throwing warning hook.
+    const logInserts = cap.compiled.filter((c) => /insert into "logs"/.test(c.sql));
+    expect(logInserts).toHaveLength(1);
+    await adapter.close();
+  });
+});
