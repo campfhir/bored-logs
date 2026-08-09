@@ -23,6 +23,7 @@ Structured PostgreSQL-backed logging for React + Node — custom adapter-based l
   - [`LoggerProvider` options](#loggerprovider-options)
   - [`createLogIngestHandler` options](#createlogingesthandler-options)
   - [Next.js and console output](#nextjs-and-console-output)
+- [Shipping logs between applications](#shipping-logs-between-applications)
 - [Log search](#log-search)
 - [UI components](#ui-components)
   - [LogTable](#logtable)
@@ -907,6 +908,85 @@ Two Next.js config settings to be aware of:
 - **`serverExternalPackages`** (or `transpilePackages`) — see [Installation](#installation); unrelated to console output, but required so the server adapters aren't bundled.
 
 ---
+
+## Shipping logs between applications
+
+The same `HttpAdapter` → `createLogIngestHandler` pipeline that ships browser logs works **service-to-service**: any number of separate applications ship their logs over HTTPS to one central log server that owns the database.
+
+```
+App A (api)     ──┐
+App B (worker)  ──┼── HTTPS POST /api/logs ──▶  Log server ── PostgresAdapter ──▶ Postgres
+App C (browser) ──┘        (batched JSON)        (ingest + query UI)
+```
+
+### The shipping application (App A)
+
+A normal logger with a standalone `HttpAdapter` — no database, no `pg` dependency:
+
+```typescript
+// app-a/src/logger.ts
+import { createLogger, ConsoleAdapter } from "@campfhir/bored-logs";
+import { HttpAdapter } from "@campfhir/bored-logs/adapters/http";
+
+export const logger = createLogger({
+  application: "app-a",          // travels on every record — searchable on the server
+  version: process.env.APP_VERSION,
+});
+
+logger.addAdapter(new ConsoleAdapter());
+logger.addAdapter(
+  new HttpAdapter({
+    endpoint: "https://logs.example.com/api/logs",
+    headers: { authorization: `Bearer ${process.env.LOG_SHIP_TOKEN}` },
+    batchSize: 50,               // flush every 50 records…
+    flushInterval: 5000,         // …or every 5 s, whichever first
+    onError: (err) => console.error("[log-ship] delivery failed", err),
+  }),
+);
+
+// Don't lose the tail on shutdown — flush() drains the HttpAdapter queue.
+logger.on("SIGTERM", async () => {});
+```
+
+Failed deliveries are re-queued for the next flush (bounded by `maxQueue`, default 1 000, oldest dropped first), so a briefly unreachable log server doesn't lose recent records or block the app.
+
+### The log server (App B)
+
+One ingest endpoint feeding a logger that owns the `PostgresAdapter`. `createLogIngestHandler` returns a standard `(Request) => Promise<Response>`, so it mounts on Next.js, Hono, or anything Fetch-shaped — wrap it for auth:
+
+```typescript
+// log-server/app/api/logs/route.ts
+import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { logger } from "@/lib/logger"; // createLogger() + PostgresAdapter
+
+const ingest = createLogIngestHandler({
+  logger,
+  maxBatch: 100, // ≥ the largest shipper batchSize, or batches bounce with 413
+  // Enrich or reject per record; the Request is available for headers/IP.
+  transform: (record, req) => ({
+    ...record,
+    attrs: { ...record.attrs, shippedFrom: req.headers.get("x-forwarded-for") },
+  }),
+});
+
+export async function POST(req: Request): Promise<Response> {
+  if (req.headers.get("authorization") !== `Bearer ${process.env.LOG_SHIP_TOKEN}`) {
+    return new Response(null, { status: 401 });
+  }
+  return ingest(req);
+}
+```
+
+### Semantics across the wire
+
+- **Source identity** — each record carries the *shipper's* `application` / `version` (`ingest()` preserves them rather than stamping the server's own), so one database serves many apps and `application:'app-a'` in [log search](#log-search) isolates a single app's logs.
+- **`secure()` values ship tagged** and are encrypted at rest by the log server's `PostgresAdapter` (when configured with `encrypt`/`decrypt`) — the shipping app needs no key material.
+- **`redact()` values never leave the shipping app** — scrubbed to the placeholder (or omitted, via `redactMode: "omit"`) before the request is built.
+- **Level gating is layered**: the shipper's logger level → its `HttpAdapter.level` (ship less than you print locally, e.g. `level: "info"`) → the log server's own logger/adapter levels.
+- **Custom levels** must be registered on both sides (`createLogger({ levels })`) so gating and query defaults recognise them.
+- **Timestamps are the shipper's** — records carry the original event time, not arrival time.
+
+The [demo](demo/) exercises this exact pipeline with the browser as the shipping "app"; a Node service differs only in construction (`HttpAdapter` added by hand, flush wired to process exit instead of page unload).
 
 ## Log search
 
