@@ -90,8 +90,8 @@
     "bench:e2e": "vitest bench --run --config vitest.e2e.config.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
-    "demo": "docker compose -f demo/compose.yaml up --build",
-    "demo:down": "docker compose -f demo/compose.yaml down -v"
+    "demo": "docker compose -f demos/web/compose.yaml up --build",
+    "demo:down": "docker compose -f demos/web/compose.yaml down -v"
   },
   "peerDependencies": {
     "kysely": ">=0.27",

@@ -6,7 +6,7 @@ adapter and the React UI components (`LogSearchBar`, `LogTable`,
 
 > Not published to npm. It lives in the repo and imports the library under its
 > published name (`@campfhir/bored-logs`), resolved straight to the LOCAL
-> SOURCE in `../src` via tsconfig path aliases — so `next dev` picks up
+> SOURCE in `../../src` via tsconfig path aliases — so `next dev` picks up
 > library changes live, with no build step. (A `link:..` dependency remains as
 > the fallback for anything that bypasses the aliases.)
 
@@ -51,7 +51,7 @@ pnpm demo:down   # stop and wipe the database
 Or directly with compose:
 
 ```bash
-cd demo
+cd demos/web
 docker compose up --build     # → http://localhost:3000
 docker compose down -v        # stop and wipe the database
 ```
@@ -62,19 +62,19 @@ container.
 
 ## Run it locally
 
-The demo compiles the library from `../src` directly — no library build needed:
+The demo compiles the library from `../../src` directly — no library build needed:
 
 ```bash
 # start a Postgres for the demo (reuses the demo compose db service)
-docker compose -f demo/compose.yaml up -d db
+docker compose -f demos/web/compose.yaml up -d db
 
 # run the app
-cd demo
-pnpm install                  # standalone install (see .npmrc: ignore-workspace)
+cd demos/web
+pnpm install --ignore-workspace   # standalone — don't resolve into the repo workspace
 pnpm dev                      # → http://localhost:3000
 ```
 
-Edits under `../src` hot-reload in the running demo like any app file.
+Edits under `../../src` hot-reload in the running demo like any app file.
 
 `DATABASE_URL` defaults to `postgres://postgres:postgres@localhost:5433/bored_logs_demo`
 (the compose `db` service). Override it to point anywhere:

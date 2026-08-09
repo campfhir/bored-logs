@@ -4,8 +4,8 @@
 
 /** A typed {@link Error} whose `message` is a string literal, with chainable cause and metadata. */
 export class Err<S extends string = string> extends Error {
-  message: S;
-  cause?: Error | Err<any>;
+  override message: S;
+  override cause?: Error | Err<any>;
   meta?: Record<string, any>;
 
   constructor(s: S, opt?: ErrorOptions) {
@@ -26,7 +26,7 @@ export class Err<S extends string = string> extends Error {
   }
 
   /** Render the message plus any cause and metadata as a multi-line string. */
-  toString(): string {
+  override toString(): string {
     let str = this.message as string;
     if (this.cause) {
       str += `\nCaused by: ${this.cause}`;

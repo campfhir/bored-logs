@@ -9,7 +9,7 @@
     "start": "next start -H 0.0.0.0"
   },
   "dependencies": {
-    "@campfhir/bored-logs": "link:..",
+    "@campfhir/bored-logs": "link:../..",
     "kysely": "^0.27.0",
     "next": "^15.1.0",
     "pg": "^8.13.0",

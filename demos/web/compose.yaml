@@ -1,6 +1,6 @@
 # Full-stack demo: Next.js app + Postgres, both in Docker.
 #
-#   cd demo
+#   cd demos/web
 #   docker compose up --build      # → http://localhost:3000
 #   docker compose down -v         # stop + wipe the database
 #
@@ -26,7 +26,7 @@ services:
   web:
     build:
       context: ..
-      dockerfile: demo/Dockerfile
+      dockerfile: demos/web/Dockerfile
     container_name: bored-logs-demo-web
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/bored_logs_demo

@@ -987,7 +987,7 @@ export async function POST(req: Request): Promise<Response> {
 - **Timestamps are the shipper's** — records carry the original event time, not arrival time.
 - **Batch size negotiates itself** — every ingest response advertises the server's `maxBatch` via the `x-log-max-batch` header. The `HttpAdapter` learns it, chunks future shipments to fit, and recovers from a 413 *within the same flush* by re-sending in smaller chunks (halving against an older server without the header). An outage backlog larger than the server's limit therefore drains in sequential chunks instead of wedging the queue — no need to align `batchSize` and `maxBatch` by hand.
 
-The [demo](demo/) exercises this exact pipeline with the browser as the shipping "app"; a Node service differs only in construction (`HttpAdapter` added by hand, flush wired to process exit instead of page unload).
+A runnable two-process version of this exact topology lives in [`demos/shipping/`](demos/shipping/); the [web demo](demos/web/) exercises the same pipeline with the browser as the shipping "app"; a Node service differs only in construction (`HttpAdapter` added by hand, flush wired to process exit instead of page unload).
 
 ## Log search
 
@@ -1615,7 +1615,7 @@ pnpm test        # unit + component suite (jsdom, no database)
 
 A full-stack showcase (Next.js + Postgres, Tailwind, all the UI components wired
 to a live database) lives in the GitHub repository under
-[`demo/`](https://github.com/campfhir/bored-logs/tree/main/demo). It is **not**
+[`demos/web/`](https://github.com/campfhir/bored-logs/tree/main/demos/web). It is **not**
 included in the published npm or JSR package — clone the repo to run it:
 
 ```bash
@@ -1626,7 +1626,7 @@ pnpm demo        # build + run the demo and Postgres in Docker → http://localh
 pnpm demo:down   # stop and wipe it
 ```
 
-See the [demo README](https://github.com/campfhir/bored-logs/blob/main/demo/README.md)
+See the [demo README](https://github.com/campfhir/bored-logs/blob/main/demos/web/README.md)
 for running it locally without Docker.
 
 ### Live end-to-end tests

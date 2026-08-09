@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      // Resolve the library under its published name from the LOCAL SOURCE
+      // three directories up (tsx honours tsconfig paths) — no build step.
+      // The `link:../../..` dependency (→ dist) is the fallback.
+      "@campfhir/bored-logs": ["../../../src/index.ts"],
+      "@campfhir/bored-logs/server": ["../../../src/server/index.ts"],
+      "@campfhir/bored-logs/adapters/psql": ["../../../src/adapters/psql/adapter.ts"],
+      "@campfhir/bored-logs/adapters/psql/migration": ["../../../src/adapters/psql/migration/index.ts"]
+    }
+  },
+  "include": ["*.ts"]
+}

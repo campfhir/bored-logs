@@ -1,0 +1,16 @@
+{
+  "unstable": ["sloppy-imports"],
+  "compilerOptions": {
+    // The library's universal modules reference guarded Node/browser globals
+    // (process, Buffer, document); pull in both type worlds for `deno check`.
+    "lib": ["deno.ns", "dom", "esnext"],
+    "types": ["npm:@types/node"]
+  },
+  "imports": {
+    "@campfhir/bored-logs": "../../../src/index.ts",
+    "@campfhir/bored-logs/adapters/http": "../../../src/adapters/http/adapter.ts"
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-env main.ts"
+  }
+}
