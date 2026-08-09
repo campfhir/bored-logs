@@ -210,3 +210,86 @@ describe("HttpAdapter — end-to-end encryption", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Risk mitigations: eager warm-up, fail-fast without WebCrypto, key-conflict
+// surfacing.
+// ---------------------------------------------------------------------------
+
+describe("HttpAdapter — E2E risk mitigations", () => {
+  let server: ReturnType<typeof makeE2EServer>;
+
+  beforeEach(() => {
+    server = makeE2EServer();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("start() eagerly registers the session before any write or flush", async () => {
+    const adapter = new HttpAdapter({
+      endpoint: "https://logs.example/api/logs",
+      flushInterval: 0,
+      encryption: {},
+    });
+    const stop = adapter.start();
+    await vi.waitFor(() => {
+      expect(server.registrations()).toHaveLength(1);
+    });
+    expect(server.shipments()).toHaveLength(0); // nothing shipped — just warm
+
+    // The warmed session means an immediate unload flush can seal.
+    adapter.write(rec({ message: "tail", template: "tail" }));
+    adapter.flushBeacon();
+    await vi.waitFor(() => {
+      expect(server.records.map((r) => r.message)).toEqual(["tail"]);
+    });
+    stop();
+  });
+
+  it("throws at construction when encryption is configured without crypto.subtle", () => {
+    const realCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: realCrypto.getRandomValues.bind(realCrypto) });
+    try {
+      expect(
+        () => new HttpAdapter({ endpoint: "/logs", encryption: {} }),
+      ).toThrowError(/crypto\.subtle/);
+      // Plaintext construction stays fine without subtle.
+      expect(() => new HttpAdapter({ endpoint: "/logs" })).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("surfaces a 409 client-key-conflict via onError without retry loops or plaintext", async () => {
+    // Pre-register the clientId with a DIFFERENT key (the takeover victim).
+    const { generateEcdsaKeyPair } = await import("../adapters/http/e2e-wire");
+    const other = await generateEcdsaKeyPair();
+    await server.ctx.store.set({
+      clientId: "contested",
+      signingKeyJwk: await crypto.subtle.exportKey("jwk", other.publicKey),
+      algo: "ecdh-p256+a256gcm+ecdsa-p256",
+      registeredAt: Date.now(),
+    });
+
+    const onError = vi.fn();
+    const adapter = new HttpAdapter({
+      endpoint: "https://logs.example/api/logs",
+      flushInterval: 0,
+      encryption: { clientId: "contested" }, // ephemeral keys → conflict
+      onError,
+    });
+    adapter.write(rec());
+    await adapter.flush();
+
+    expect(onError).toHaveBeenCalled();
+    const err = onError.mock.calls[0][0] as Error;
+    expect(String(err)).toMatch(/409|client-key-conflict|registration/i);
+    expect(adapter.pending).toBe(1); // re-queued, no loss
+    expect(server.shipments()).toHaveLength(0); // never shipped anything
+    assertNoPlaintextShipment(server.calls);
+    // One registration attempt for this flush — no hot loop.
+    expect(server.registrations()).toHaveLength(1);
+  });
+});

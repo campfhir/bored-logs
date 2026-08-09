@@ -111,6 +111,7 @@ export class HttpAdapter implements LogAdapter {
 
   constructor(opts: HttpAdapterOptions) {
     assertNoTransportWithEncryption(opts);
+    assertE2ESupported(opts);
     this._opts = opts;
     this._levels = { ...LOG_LEVELS, ...opts.levels };
   }
@@ -118,6 +119,7 @@ export class HttpAdapter implements LogAdapter {
   /** Merge fresh options in (e.g. when `LoggerProvider` props change). */
   setOptions(opts: HttpAdapterOptions): void {
     assertNoTransportWithEncryption(opts);
+    assertE2ESupported(opts);
     // The E2E session (and its registration) survives option churn unless the
     // fields that define it change — LoggerProvider re-commits every render.
     if (this._e2e && e2eConfigKey(opts) !== e2eConfigKey(this._opts)) {
@@ -412,6 +414,14 @@ export class HttpAdapter implements LogAdapter {
    */
   start(): () => void {
     this.stopTimer();
+    // Warm the E2E session immediately: registering now (instead of at the
+    // first flush) means the session is almost always ready by the time an
+    // unload flush needs to seal — shrinking the drop-on-unload window.
+    if (this._opts.encryption) {
+      void this._session()
+        .ensureRegistered()
+        .catch((err) => this._opts.onError?.(err, []));
+    }
     const interval = this._opts.flushInterval ?? DEFAULTS.flushInterval;
     if (interval > 0 && typeof setInterval === "function") {
       this._timer = setInterval(() => {
@@ -455,6 +465,22 @@ function assertNoTransportWithEncryption(opts: HttpAdapterOptions): void {
       "[bored-logs] `transport` and `encryption` cannot be combined — a custom " +
         "transport receives the structured plaintext payload, which would bypass " +
         "end-to-end encryption. Drop one of the two options.",
+    );
+  }
+}
+
+/**
+ * Fail FAST when encryption is configured in a runtime without WebCrypto
+ * (e.g. an insecure browser context) — a loud construction-time error beats
+ * every flush failing while records rot in the queue.
+ */
+function assertE2ESupported(opts: HttpAdapterOptions): void {
+  if (!opts.encryption) return;
+  if (!(globalThis as { crypto?: Crypto }).crypto?.subtle) {
+    throw new Error(
+      "[bored-logs] `encryption` is configured but WebCrypto (crypto.subtle) is " +
+        "unavailable in this runtime — end-to-end encryption requires a secure " +
+        "context (https/localhost) or Node ≥ 18.",
     );
   }
 }
