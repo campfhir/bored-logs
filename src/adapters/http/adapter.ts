@@ -80,6 +80,8 @@ export class HttpAdapter implements LogAdapter {
   private _levels: Record<string, number>;
   private _queue: ClientLogRecord[] = [];
   private _timer: ReturnType<typeof setInterval> | null = null;
+  /** Server-advertised max records per shipment (learned from responses). */
+  private _serverMaxBatch: number | null = null;
 
   constructor(opts: HttpAdapterOptions) {
     this._opts = opts;
@@ -141,37 +143,93 @@ export class HttpAdapter implements LogAdapter {
   // ── Delivery ────────────────────────────────────────────────────────────────
 
   /**
-   * Ship the queued records now. Resolves once the batch has been sent. On
-   * failure the batch is re-queued (bounded by `maxQueue`) and `onError` fires.
-   * Implements {@link LogAdapter.flush}.
+   * Ship the queued records now, draining in server-sized chunks. Resolves
+   * once the queue is empty (or delivery failed). Implements
+   * {@link LogAdapter.flush}.
+   *
+   * Batch-size negotiation: every ingest-handler response advertises the
+   * server's `maxBatch` via the `x-log-max-batch` header, which this adapter
+   * learns and uses to chunk future shipments. A 413 is recovered *within the
+   * same flush* — the batch is re-queued and re-sent in smaller chunks (from
+   * the advertised limit, or by halving against an older server without the
+   * header) — so an outage backlog larger than the server's limit can never
+   * wedge the queue. Network failures re-queue the chunk (bounded by
+   * `maxQueue`) and stop; the next flush retries.
    */
   async flush(): Promise<void> {
     if (this._queue.length === 0) return;
-    const batch = this._queue.splice(0, this._queue.length);
 
-    try {
-      if (this._opts.transport) {
+    if (this._opts.transport) {
+      // A custom transport returns no Response, so there is nothing to learn
+      // from — ship everything in one call, as before.
+      const batch = this._queue.splice(0, this._queue.length);
+      try {
         await this._opts.transport({ logs: batch }, this._endpoint);
+      } catch (err) {
+        const room = Math.max(0, this._maxQueue - this._queue.length);
+        if (room > 0) this._queue.unshift(...batch.slice(0, room));
+        this._opts.onError?.(err, batch);
+      }
+      return;
+    }
+
+    // Safety valve: a pathological server limit of 1 against a full queue
+    // means many sequential posts — cap the per-flush drain and leave the
+    // remainder for the next flush rather than looping unbounded.
+    for (let posts = 0; this._queue.length > 0 && posts < 100; posts++) {
+      const size = Math.min(this._queue.length, this._serverMaxBatch ?? this._queue.length);
+      const batch = this._queue.splice(0, size);
+
+      try {
+        const extra = await resolveHeaders(this._opts.headers);
+        const res = await fetch(this._endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...extra },
+          body: JSON.stringify({ logs: batch } satisfies LogShipmentPayload),
+          credentials: this._opts.credentials,
+          // Let a short send outlive a navigation, so we lose fewer records.
+          keepalive: true,
+        });
+        this._learnMaxBatch(res);
+
+        if (res.status === 413) {
+          // Too large: put the chunk back (order intact) and retry smaller.
+          this._queue.unshift(...batch);
+          const advertised = this._serverMaxBatch;
+          if (advertised == null || advertised >= batch.length) {
+            // No usable advertisement — bisect.
+            this._serverMaxBatch = Math.floor(batch.length / 2);
+          }
+          if ((this._serverMaxBatch ?? 0) < 1) {
+            // Even a single record bounces — nothing smaller to try.
+            this._serverMaxBatch = 1;
+            this._opts.onError?.(
+              new Error(`[bored-logs] log shipment failed: HTTP 413`),
+              batch,
+            );
+            return;
+          }
+          continue;
+        }
+        if (!res.ok) {
+          throw new Error(`[bored-logs] log shipment failed: HTTP ${res.status}`);
+        }
+      } catch (err) {
+        // Re-queue at the front so the next flush retries, without exceeding the cap.
+        const room = Math.max(0, this._maxQueue - this._queue.length);
+        if (room > 0) this._queue.unshift(...batch.slice(0, room));
+        this._opts.onError?.(err, batch);
         return;
       }
-      const extra = await resolveHeaders(this._opts.headers);
-      const res = await fetch(this._endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...extra },
-        body: JSON.stringify({ logs: batch } satisfies LogShipmentPayload),
-        credentials: this._opts.credentials,
-        // Let a short send outlive a navigation, so we lose fewer records.
-        keepalive: true,
-      });
-      if (!res.ok) {
-        throw new Error(`[bored-logs] log shipment failed: HTTP ${res.status}`);
-      }
-    } catch (err) {
-      // Re-queue at the front so the next flush retries, without exceeding the cap.
-      const room = Math.max(0, this._maxQueue - this._queue.length);
-      if (room > 0) this._queue.unshift(...batch.slice(0, room));
-      this._opts.onError?.(err, batch);
     }
+  }
+
+  /** Adopt the server's advertised batch limit from a response header. */
+  private _learnMaxBatch(res: Response): void {
+    const raw = res.headers?.get?.("x-log-max-batch");
+    if (raw == null) return;
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 1) this._serverMaxBatch = n;
   }
 
   /**
@@ -181,7 +239,21 @@ export class HttpAdapter implements LogAdapter {
    */
   flushBeacon(): void {
     if (this._queue.length === 0) return;
+    // Respect the learned server limit — an oversized beacon would bounce
+    // with 413 and, on unload, there is no retry.
+    if (this._serverMaxBatch != null && this._queue.length > this._serverMaxBatch) {
+      while (this._queue.length > this._serverMaxBatch) {
+        const chunk = this._queue.splice(0, this._serverMaxBatch);
+        this._sendBeaconChunk(chunk);
+      }
+    }
     const batch = this._queue.splice(0, this._queue.length);
+    if (batch.length === 0) return;
+    this._sendBeaconChunk(batch);
+  }
+
+  /** Best-effort delivery of one chunk via sendBeacon (keepalive fetch fallback). */
+  private _sendBeaconChunk(batch: ClientLogRecord[]): void {
     const body = JSON.stringify({ logs: batch } satisfies LogShipmentPayload);
 
     if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {

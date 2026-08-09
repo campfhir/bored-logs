@@ -134,3 +134,31 @@ describe("createLogIngestHandler", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Batch-size advertisement — every response tells the shipper the max.
+// ---------------------------------------------------------------------------
+
+describe("createLogIngestHandler — max-batch advertisement", () => {
+  it("advertises maxBatch on a 200", async () => {
+    const handler = createLogIngestHandler({ logger: createLogger(), maxBatch: 42 });
+    const res = await handler(post({ logs: [wireRecord()] }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-log-max-batch")).toBe("42");
+  });
+
+  it("advertises the default maxBatch (100)", async () => {
+    const handler = createLogIngestHandler({ logger: createLogger() });
+    const res = await handler(post({ logs: [wireRecord()] }));
+    expect(res.headers.get("x-log-max-batch")).toBe("100");
+  });
+
+  it("advertises maxBatch on a 413, in the header and the body", async () => {
+    const handler = createLogIngestHandler({ logger: createLogger(), maxBatch: 2 });
+    const res = await handler(post({ logs: [wireRecord(), wireRecord(), wireRecord()] }));
+    expect(res.status).toBe(413);
+    expect(res.headers.get("x-log-max-batch")).toBe("2");
+    const body = await res.json();
+    expect(body.maxBatch).toBe(2);
+  });
+});

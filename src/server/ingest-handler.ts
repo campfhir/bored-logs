@@ -116,7 +116,12 @@ export function createLogIngestHandler(
       return jsonError(400, "expected a { logs: [...] } body");
     }
     if (logs.length > maxBatch) {
-      return jsonError(413, `batch too large (max ${maxBatch})`);
+      // Advertise the limit in the header AND the body so the shipper can
+      // split its batch and retry immediately (see HttpAdapter negotiation).
+      return new Response(JSON.stringify({ error: `batch too large (max ${maxBatch})`, maxBatch }), {
+        status: 413,
+        headers: { "content-type": "application/json", [MAX_BATCH_HEADER]: String(maxBatch) },
+      });
     }
 
     try {
@@ -134,7 +139,9 @@ export function createLogIngestHandler(
       }
       return new Response(JSON.stringify({ accepted }), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        // Every success also advertises the batch limit, so shippers learn it
+        // before ever hitting a 413.
+        headers: { "content-type": "application/json", [MAX_BATCH_HEADER]: String(maxBatch) },
       });
     } catch (err) {
       onError(err, request);
@@ -142,6 +149,12 @@ export function createLogIngestHandler(
     }
   };
 }
+
+/**
+ * Response header advertising the handler's `maxBatch` to shippers — the
+ * server half of the HttpAdapter batch-size negotiation.
+ */
+export const MAX_BATCH_HEADER = "x-log-max-batch";
 
 /** A small JSON error body helper. */
 function jsonError(status: number, error: string): Response {

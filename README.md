@@ -961,7 +961,7 @@ import { logger } from "@/lib/logger"; // createLogger() + PostgresAdapter
 
 const ingest = createLogIngestHandler({
   logger,
-  maxBatch: 100, // ≥ the largest shipper batchSize, or batches bounce with 413
+  maxBatch: 100, // advertised to shippers on every response (see below)
   // Enrich or reject per record; the Request is available for headers/IP.
   transform: (record, req) => ({
     ...record,
@@ -985,6 +985,7 @@ export async function POST(req: Request): Promise<Response> {
 - **Level gating is layered**: the shipper's logger level → its `HttpAdapter.level` (ship less than you print locally, e.g. `level: "info"`) → the log server's own logger/adapter levels.
 - **Custom levels** must be registered on both sides (`createLogger({ levels })`) so gating and query defaults recognise them.
 - **Timestamps are the shipper's** — records carry the original event time, not arrival time.
+- **Batch size negotiates itself** — every ingest response advertises the server's `maxBatch` via the `x-log-max-batch` header. The `HttpAdapter` learns it, chunks future shipments to fit, and recovers from a 413 *within the same flush* by re-sending in smaller chunks (halving against an older server without the header). An outage backlog larger than the server's limit therefore drains in sequential chunks instead of wedging the queue — no need to align `batchSize` and `maxBatch` by hand.
 
 The [demo](demo/) exercises this exact pipeline with the browser as the shipping "app"; a Node service differs only in construction (`HttpAdapter` added by hand, flush wired to process exit instead of page unload).
 

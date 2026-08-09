@@ -192,3 +192,110 @@ describe("HttpAdapter", () => {
     expect(transport.mock.calls[0][1]).toBe("/api/logs");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Batch-size negotiation — the server advertises its maxBatch on every
+// response (x-log-max-batch); the adapter learns it, chunks flushes, and
+// recovers from 413 by splitting within the same flush.
+// ---------------------------------------------------------------------------
+
+describe("HttpAdapter — batch-size negotiation", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  const ok = (maxBatch?: number) =>
+    new Response(JSON.stringify({ accepted: 1 }), {
+      status: 200,
+      headers: maxBatch != null ? { "x-log-max-batch": String(maxBatch) } : {},
+    });
+  const tooLarge = (maxBatch?: number) =>
+    new Response(JSON.stringify({ error: "batch too large", maxBatch }), {
+      status: 413,
+      headers: maxBatch != null ? { "x-log-max-batch": String(maxBatch) } : {},
+    });
+
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => ok());
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function fill(adapter: HttpAdapter, n: number): void {
+    // Shipping interpolates from the template, so set both.
+    for (let i = 0; i < n; i++) adapter.write(rec({ message: `m${i}`, template: `m${i}` }));
+  }
+
+  it("learns the server max from a 200 and chunks subsequent flushes", async () => {
+    const adapter = new HttpAdapter({ endpoint: "/logs", flushInterval: 0, batchSize: 1000 });
+    fetchMock.mockResolvedValue(ok(3));
+
+    fill(adapter, 2);
+    await adapter.flush(); // 2 ≤ anything — one post, learns max=3
+    expect(bodyOf(fetchMock, 0).logs).toHaveLength(2);
+
+    fill(adapter, 7);
+    await adapter.flush(); // now chunked: 3 + 3 + 1
+    const sizes = fetchMock.mock.calls.slice(1).map((_, i) => bodyOf(fetchMock, i + 1).logs.length);
+    expect(sizes).toEqual([3, 3, 1]);
+  });
+
+  it("recovers from a 413 carrying the max, within the same flush, in order", async () => {
+    const adapter = new HttpAdapter({ endpoint: "/logs", flushInterval: 0, batchSize: 1000 });
+    fetchMock.mockResolvedValueOnce(tooLarge(2)).mockResolvedValue(ok(2));
+
+    fill(adapter, 5);
+    await adapter.flush();
+
+    // First post bounced (5 > 2); then 2 + 2 + 1 succeed.
+    expect(bodyOf(fetchMock, 0).logs).toHaveLength(5);
+    const sizes = fetchMock.mock.calls.slice(1).map((_, i) => bodyOf(fetchMock, i + 1).logs.length);
+    expect(sizes).toEqual([2, 2, 1]);
+    // Order preserved end-to-end.
+    const shipped = fetchMock.mock.calls.slice(1).flatMap((_, i) => bodyOf(fetchMock, i + 1).logs);
+    expect(shipped.map((l) => l.message)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
+  });
+
+  it("halves on a 413 without the header (older server)", async () => {
+    const adapter = new HttpAdapter({ endpoint: "/logs", flushInterval: 0, batchSize: 1000 });
+    fetchMock.mockResolvedValueOnce(tooLarge()).mockResolvedValue(ok());
+
+    fill(adapter, 8);
+    await adapter.flush();
+
+    expect(bodyOf(fetchMock, 0).logs).toHaveLength(8); // bounced
+    const sizes = fetchMock.mock.calls.slice(1).map((_, i) => bodyOf(fetchMock, i + 1).logs.length);
+    expect(sizes).toEqual([4, 4]); // halved and drained
+  });
+
+  it("gives up (re-queues, onError) when a single record still bounces", async () => {
+    const onError = vi.fn();
+    const adapter = new HttpAdapter({ endpoint: "/logs", flushInterval: 0, batchSize: 1000, onError });
+    fetchMock.mockResolvedValue(tooLarge(1));
+
+    fill(adapter, 1);
+    await adapter.flush();
+
+    expect(onError).toHaveBeenCalled();
+    expect(adapter.pending).toBe(1); // still queued for a later attempt
+  });
+
+  it("still re-queues and stops on network failure mid-drain", async () => {
+    const onError = vi.fn();
+    const adapter = new HttpAdapter({ endpoint: "/logs", flushInterval: 0, batchSize: 1000, onError });
+
+    // Teach the adapter the server limit first.
+    fetchMock.mockResolvedValueOnce(ok(2));
+    fill(adapter, 2);
+    await adapter.flush();
+
+    // Then a drain whose first chunk dies on the network.
+    fetchMock.mockRejectedValueOnce(new Error("net down"));
+    fill(adapter, 4);
+    await adapter.flush(); // chunk (2) fails → re-queued in front of the rest
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(adapter.pending).toBe(4); // nothing lost, order preserved
+  });
+});
