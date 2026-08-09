@@ -21,9 +21,12 @@ export type LogRegistrationHandlerOptions = {
   /**
    * Gate registrations (checked BEFORE anything touches the store) — the
    * one-line way to front the TOFU endpoint with the same auth as ingest.
-   * Return false to answer 401.
+   * Return false to answer 401; a THROW answers 500 (the auth
+   * infrastructure failed — fail closed, surfaced via `onError`).
    */
   authorize?: (request: Request) => boolean | Promise<boolean>;
+  /** Called when handling throws (incl. a throwing `authorize`). Defaults to `console.error`. */
+  onError?: (err: unknown, request: Request) => void;
 };
 
 /** Build the registration Fetch handler bound to a shared {@link E2EServerContext}. */
@@ -31,15 +34,34 @@ export function createLogRegistrationHandler(
   context: E2EServerContext,
   options: LogRegistrationHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
+  const onError =
+    options.onError ??
+    ((err: unknown) => {
+      console.error("[bored-logs] log registration failed:", err);
+    });
+
   return async function handler(request: Request): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405, headers: { allow: "POST" } });
     }
-    if (options.authorize && !(await options.authorize(request))) {
-      return new Response(JSON.stringify({ error: "unauthorized" }), {
-        status: 401,
-        headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: "unauthorized" },
-      });
+    if (options.authorize) {
+      let allowed: boolean;
+      try {
+        allowed = await options.authorize(request);
+      } catch (err) {
+        // Auth infrastructure failure ≠ denial: fail closed as a 500.
+        onError(err, request);
+        return new Response(JSON.stringify({ error: "authorization check failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (!allowed) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: "unauthorized" },
+        });
+      }
     }
 
     let body: unknown;

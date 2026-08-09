@@ -529,3 +529,30 @@ describe("server key rotation", () => {
     expect(records.length).toBe(2);
   });
 });
+
+describe("registration authorize hook — throw semantics", () => {
+  it("a THROWING authorize fails closed with 500 and touches nothing", async () => {
+    const ctx = createE2EServerContext();
+    const onError = vi.fn();
+    const handler = createLogRegistrationHandler(ctx, {
+      authorize: () => {
+        throw new Error("auth backend down");
+      },
+      onError,
+    });
+    const signing = await generateEcdsaKeyPair();
+    const res = await handler(
+      new Request("http://x/register", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: "x",
+          algo: E2E_ALGO_V1,
+          signingKey: await crypto.subtle.exportKey("jwk", signing.publicKey),
+        }),
+      }),
+    ); // must NOT reject
+    expect(res.status).toBe(500);
+    expect(await ctx.store.get("x")).toBeUndefined();
+    expect(onError).toHaveBeenCalled();
+  });
+});

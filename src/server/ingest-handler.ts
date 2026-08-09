@@ -126,11 +126,26 @@ export function createLogIngestHandler(
       });
     }
 
-    if (options.authorize && !(await options.authorize(request))) {
-      return new Response(JSON.stringify({ error: "unauthorized" }), {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      });
+    if (options.authorize) {
+      // A THROW is not a denial — it means the auth infrastructure itself
+      // failed (e.g. the introspection service is down). Fail closed, but as
+      // a 500 with onError visibility, distinct from a 401 rejection.
+      let allowed: boolean;
+      try {
+        allowed = await options.authorize(request);
+      } catch (err) {
+        onError(err, request);
+        return new Response(JSON.stringify({ error: "authorization check failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (!allowed) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
     }
 
     let body: unknown;

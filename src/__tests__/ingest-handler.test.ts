@@ -216,4 +216,23 @@ describe("createLogIngestHandler — authorize hook", () => {
     expect(res.status).toBe(401);
     expect(opened).toBe(0); // no signature/decrypt work for unauthenticated traffic
   });
+  it("a THROWING authorize fails closed: 500, onError notified, nothing ingested", async () => {
+    const { adapter, records } = makeCapture();
+    const logger = createLogger();
+    logger.addAdapter(adapter);
+    const onError = vi.fn();
+
+    const handler = createLogIngestHandler({
+      logger,
+      onError,
+      authorize: async () => {
+        throw new Error("introspection service down");
+      },
+    });
+    const res = await handler(post({ logs: [wireRecord()] })); // must NOT reject
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe("authorization check failed");
+    expect(records).toHaveLength(0);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), expect.any(Request));
+  });
 });
