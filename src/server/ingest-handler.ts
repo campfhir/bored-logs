@@ -1,5 +1,7 @@
 import type { LogRecord } from "../logger/adapter";
 import type { ClientLogRecord, LogShipmentPayload } from "../adapters/http/types";
+import type { E2EServerContext } from "./e2e-context";
+import { E2E_HEADERS, E2E_ERROR_HEADER } from "../adapters/http/e2e-wire";
 
 // ---------------------------------------------------------------------------
 // createLogIngestHandler — a Next.js Route Handler that receives log batches
@@ -42,6 +44,16 @@ export type LogIngestHandlerOptions = {
   ) => LogRecord | null | Promise<LogRecord | null>;
   /** Called when handling throws; return value is ignored. Defaults to `console.error`. */
   onError?: (err: unknown, request: Request) => void;
+  /**
+   * Opt-in end-to-end shipment encryption. `context` is the shared
+   * {@link E2EServerContext} (also given to `createLogRegistrationHandler`);
+   * encrypted requests (marked by the `x-bored-logs-algo` header) are
+   * verified and decrypted before the normal pipeline runs. With
+   * `required: true`, plaintext shipments are rejected with 400
+   * `encryption-required`. Plaintext handling is byte-identical when this
+   * option is absent.
+   */
+  encryption?: { context: E2EServerContext; required?: boolean };
 };
 
 /** Type guard for one wire record — tolerant of extra fields, strict on the ones we use. */
@@ -105,10 +117,39 @@ export function createLogIngestHandler(
     }
 
     let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return jsonError(400, "invalid JSON body");
+    const isEncrypted = request.headers.get(E2E_HEADERS.algo) !== null;
+    if (isEncrypted && options.encryption) {
+      // Verify + decrypt BEFORE any body parsing (a Request body reads once).
+      const opened = await options.encryption.context.open(request);
+      if (!opened.ok) {
+        return new Response(JSON.stringify({ error: opened.code }), {
+          status: opened.status,
+          headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: opened.code },
+        });
+      }
+      try {
+        body = JSON.parse(opened.text);
+      } catch {
+        return jsonError(400, "invalid JSON body");
+      }
+    } else if (isEncrypted && !options.encryption) {
+      // An encrypted shipment against a server with no E2E configured can
+      // never be processed — say so instead of failing JSON parsing.
+      return new Response(JSON.stringify({ error: "bad-e2e-headers" }), {
+        status: 400,
+        headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: "bad-e2e-headers" },
+      });
+    } else if (options.encryption?.required) {
+      return new Response(JSON.stringify({ error: "encryption-required" }), {
+        status: 400,
+        headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: "encryption-required" },
+      });
+    } else {
+      try {
+        body = await request.json();
+      } catch {
+        return jsonError(400, "invalid JSON body");
+      }
     }
 
     const logs = (body as Partial<LogShipmentPayload> | null)?.logs;
