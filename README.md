@@ -24,6 +24,7 @@ Structured PostgreSQL-backed logging for React + Node — custom adapter-based l
   - [`createLogIngestHandler` options](#createlogingesthandler-options)
   - [Next.js and console output](#nextjs-and-console-output)
 - [Shipping logs between applications](#shipping-logs-between-applications)
+  - [Authenticating the pipeline](#authenticating-the-pipeline)
   - [End-to-end payload encryption](#end-to-end-payload-encryption)
 - [Log search](#log-search)
 - [UI components](#ui-components)
@@ -987,6 +988,34 @@ export async function POST(req: Request): Promise<Response> {
 - **Custom levels** must be registered on both sides (`createLogger({ levels })`) so gating and query defaults recognise them.
 - **Timestamps are the shipper's** — records carry the original event time, not arrival time.
 - **Batch size negotiates itself** — every ingest response advertises the server's `maxBatch` via the `x-log-max-batch` header. The `HttpAdapter` learns it, chunks future shipments to fit, and recovers from a 413 *within the same flush* by re-sending in smaller chunks (halving against an older server without the header). An outage backlog larger than the server's limit therefore drains in sequential chunks instead of wedging the queue — no need to align `batchSize` and `maxBatch` by hand.
+
+### Authenticating the pipeline
+
+Auth is deliberately **abstracted to your choice** on both ends — the library never dictates a scheme:
+
+- **Client** — `headers` accepts an async function, resolved fresh for every shipment *and* for registration. That's the seam for any token flow:
+
+  ```typescript
+  new HttpAdapter({
+    endpoint: "https://logs.example.com/api/logs",
+    // OAuth2 client-credentials: cache + refresh inside your provider —
+    // a fresh Authorization header per shipment, expiry self-heals.
+    headers: async () => ({ authorization: `Bearer ${await tokenProvider.get()}` }),
+    encryption: {},
+  });
+  ```
+
+- **Server** — both handlers take an `authorize(request)` hook, called with the raw `Request` before *anything* else (for ingest: before body parsing and before any decryption/signature work, so unauthenticated traffic pays no crypto cost):
+
+  ```typescript
+  const authorize = async (request: Request) =>
+    verifyAccessToken(request.headers.get("authorization")); // introspection, JWKS, mTLS header — your call
+
+  createLogIngestHandler({ logger, authorize, encryption: { context: e2e } });
+  createLogRegistrationHandler(e2e, { authorize }); // TOFU protection uses the SAME policy
+  ```
+
+A failed client token simply re-queues the batch; the next flush re-resolves `headers` and retries with a fresh one.
 
 ### End-to-end payload encryption
 

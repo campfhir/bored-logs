@@ -48,16 +48,20 @@ logger.addAdapter(adapter);
 //   import { PsqlE2ERegistrationStore } from "@campfhir/bored-logs/adapters/psql";
 //   createE2EServerContext({ store: new PsqlE2ERegistrationStore(db) })
 const e2e = createE2EServerContext();
-const register = createLogRegistrationHandler(e2e, {
-  // TOFU protection: the same bearer token as ingest, enforced inside the
-  // handler as well as by the Express route wrapper below.
-  authorize: (request) => request.headers.get("authorization") === `Bearer ${TOKEN}`,
-});
+
+// One auth policy for the whole pipeline. Swap the body for anything —
+// OAuth2 token introspection, local JWT/JWKS verification, an mTLS header
+// from your proxy — both handlers just see the raw Request.
+const authorize = (request: Request): boolean =>
+  request.headers.get("authorization") === `Bearer ${TOKEN}`;
+
+const register = createLogRegistrationHandler(e2e, { authorize });
 
 // ── Ingest endpoint ────────────────────────────────────────────────────────
 const ingest = createLogIngestHandler({
   logger,
   maxBatch: 100, // advertised to shippers on every response — they negotiate down
+  authorize, // rejected before any body parsing or crypto work
   encryption: { context: e2e }, // decrypt + verify before the normal pipeline
   // Enrich each shipped record with request-derived data.
   transform: (record, req) => ({
@@ -87,22 +91,15 @@ async function toFetchHandler(
 
 const app = express();
 
-// Registration (TOFU — protected by the SAME bearer check as ingest).
-app.post("/api/logs/register", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
-  if (req.headers.authorization !== `Bearer ${TOKEN}`) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
-  await toFetchHandler(register, req, res);
-});
+// Both endpoints authenticate via their handlers' `authorize` hook — the
+// Express layer only bridges.
+app.post("/api/logs/register", express.raw({ type: "*/*", limit: "1mb" }), (req, res) =>
+  toFetchHandler(register, req, res),
+);
 
-app.post("/api/logs", express.raw({ type: "*/*", limit: "5mb" }), async (req, res) => {
-  if (req.headers.authorization !== `Bearer ${TOKEN}`) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
-  await toFetchHandler(ingest, req, res);
-});
+app.post("/api/logs", express.raw({ type: "*/*", limit: "5mb" }), (req, res) =>
+  toFetchHandler(ingest, req, res),
+);
 
 // ── Query endpoint — the same string grammar the search bar uses ───────────
 // GET /logs?q=application:'app-a' users[*]:='u_1'

@@ -162,3 +162,58 @@ describe("createLogIngestHandler — max-batch advertisement", () => {
     expect(body.maxBatch).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// authorize hook — pluggable auth (bearer, OAuth2 introspection, JWT, …).
+// ---------------------------------------------------------------------------
+
+describe("createLogIngestHandler — authorize hook", () => {
+  it("rejects with 401 before any body processing when authorize returns false", async () => {
+    const { adapter, records } = makeCapture();
+    const logger = createLogger();
+    logger.addAdapter(adapter);
+
+    const seen: string[] = [];
+    const handler = createLogIngestHandler({
+      logger,
+      authorize: async (request) => {
+        seen.push(request.headers.get("authorization") ?? "none");
+        return request.headers.get("authorization") === "Bearer good";
+      },
+    });
+
+    const denied = await handler(post({ logs: [wireRecord()] }));
+    expect(denied.status).toBe(401);
+    expect((await denied.json()).error).toBe("unauthorized");
+    expect(records).toHaveLength(0);
+
+    const req = post({ logs: [wireRecord()] });
+    req.headers.set("authorization", "Bearer good");
+    const allowed = await handler(req);
+    expect(allowed.status).toBe(200);
+    expect(records).toHaveLength(1);
+    expect(seen).toEqual(["none", "Bearer good"]);
+  });
+
+  it("runs before decryption — unauthenticated encrypted traffic never reaches the crypto path", async () => {
+    const { createE2EServerContext } = await import("../server/e2e-context");
+    let opened = 0;
+    const ctx = createE2EServerContext();
+    const realOpen = ctx.open.bind(ctx);
+    ctx.open = (r) => {
+      opened++;
+      return realOpen(r);
+    };
+
+    const handler = createLogIngestHandler({
+      logger: createLogger(),
+      encryption: { context: ctx },
+      authorize: () => false,
+    });
+    const req = post({ logs: [] });
+    req.headers.set("x-bored-logs-algo", "ecdh-p256+a256gcm+ecdsa-p256");
+    const res = await handler(req);
+    expect(res.status).toBe(401);
+    expect(opened).toBe(0); // no signature/decrypt work for unauthenticated traffic
+  });
+});

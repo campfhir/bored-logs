@@ -45,6 +45,16 @@ export type LogIngestHandlerOptions = {
   /** Called when handling throws; return value is ignored. Defaults to `console.error`. */
   onError?: (err: unknown, request: Request) => void;
   /**
+   * Gate every shipment (checked right after the method check, BEFORE any
+   * body parsing or decryption — unauthenticated traffic pays no crypto
+   * cost). Receives the raw `Request`: validate a static bearer token, an
+   * OAuth2 access token (introspection or local JWT/JWKS verification), an
+   * mTLS header from your proxy — whatever your deployment uses. Return
+   * false to answer 401. The shipping adapter's async `headers` option is
+   * the client-side counterpart (a fresh token per shipment).
+   */
+  authorize?: (request: Request) => boolean | Promise<boolean>;
+  /**
    * Opt-in end-to-end shipment encryption. `context` is the shared
    * {@link E2EServerContext} (also given to `createLogRegistrationHandler`);
    * encrypted requests (marked by the `x-bored-logs-algo` header) are
@@ -113,6 +123,13 @@ export function createLogIngestHandler(
       return new Response("Method Not Allowed", {
         status: 405,
         headers: { allow: "POST" },
+      });
+    }
+
+    if (options.authorize && !(await options.authorize(request))) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
       });
     }
 
