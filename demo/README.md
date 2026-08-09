@@ -4,8 +4,11 @@ A local full-stack showcase for **@campfhir/bored-logs** — the Postgres
 adapter and the React UI components (`LogSearchBar`, `LogTable`,
 `LogSearchSyntaxHelp`, `PurgeLogsDialog`), wired to a real database.
 
-> Not published to npm. It lives in the repo and links the library from source
-> via `link:..`, so it always exercises the current build.
+> Not published to npm. It lives in the repo and imports the library under its
+> published name (`@campfhir/bored-logs`), resolved straight to the LOCAL
+> SOURCE in `../src` via tsconfig path aliases — so `next dev` picks up
+> library changes live, with no build step. (A `link:..` dependency remains as
+> the fallback for anything that bypasses the aliases.)
 
 ## What it demonstrates
 
@@ -59,21 +62,19 @@ container.
 
 ## Run it locally
 
-The demo links the library's built `dist`, so build the library first:
+The demo compiles the library from `../src` directly — no library build needed:
 
 ```bash
-# from the repo root
-pnpm install
-pnpm build
-
 # start a Postgres for the demo (reuses the demo compose db service)
 docker compose -f demo/compose.yaml up -d db
 
 # run the app
 cd demo
-pnpm install
+pnpm install                  # standalone install (see .npmrc: ignore-workspace)
 pnpm dev                      # → http://localhost:3000
 ```
+
+Edits under `../src` hot-reload in the running demo like any app file.
 
 `DATABASE_URL` defaults to `postgres://postgres:postgres@localhost:5433/bored_logs_demo`
 (the compose `db` service). Override it to point anywhere:

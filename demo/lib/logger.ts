@@ -14,7 +14,6 @@ import {
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5433/bored_logs_demo";
-console.error(`[DEBUG] DATABASE_URL=${DATABASE_URL}`);
 
 type BoredLogs = {
   db: Kysely<Record<string, never>>;

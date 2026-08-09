@@ -15,6 +15,18 @@
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": {
+      // Resolve the library under its published name, but from the LOCAL
+      // SOURCE one directory up — so `next dev` sees library changes live,
+      // with no tsup rebuild. Mirrors the entry map in ../tsup.config.ts;
+      // the `link:..` dependency (→ dist) remains as the fallback for any
+      // resolution that bypasses these aliases.
+      "@campfhir/bored-logs": ["../src/index.ts"],
+      "@campfhir/bored-logs/server": ["../src/server/index.ts"],
+      "@campfhir/bored-logs/client": ["../src/client/index.ts"],
+      "@campfhir/bored-logs/components": ["../src/components/index.ts"],
+      "@campfhir/bored-logs/adapters/psql": ["../src/adapters/psql/adapter.ts"],
+      "@campfhir/bored-logs/adapters/psql/migration": ["../src/adapters/psql/migration/index.ts"],
+      "@campfhir/bored-logs/adapters/http": ["../src/adapters/http/adapter.ts"],
       "@/*": ["./*"]
     }
   },

@@ -3,18 +3,22 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
 const nextConfig: NextConfig = {
-  // Consume the library's shipped `dist` (linked via `link:..`) but let Next
-  // process its "use client" component boundary.
+  // `@campfhir/bored-logs` imports resolve to ../src via tsconfig `paths`
+  // (live local source, no tsup rebuild); transpilePackages stays as the
+  // guard for anything that falls back to the `link:..` dist copy.
   transpilePackages: ["@campfhir/bored-logs"],
+  // Allow compiling the library source, which lives outside the demo root.
+  experimental: { externalDir: true },
+  // Turbopack must treat the repository as the workspace so ../src compiles.
+  turbopack: { root: dirname(dirname(fileURLToPath(import.meta.url))) },
   compiler: {
     // Keep `console.*` calls in production builds via SWC, so `ConsoleAdapter` output appears in browser devtools.
     removeConsole: false,
   },
   // Keep the native-ish Postgres driver out of the bundle; require it at runtime.
   serverExternalPackages: ["pg"],
-  // This app is nested in the library repo; trace from the demo dir, not the
-  // monorepo root (silences the multiple-lockfiles warning).
-  outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
+  // The app graph now includes ../src, so trace from the repository root.
+  outputFileTracingRoot: dirname(dirname(fileURLToPath(import.meta.url))),
 };
 
 export default nextConfig;
