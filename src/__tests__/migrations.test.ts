@@ -31,7 +31,7 @@ function makeRecordingDb(ops: string[]): Kysely<any> {
 
 describe("migration registry", () => {
   it("orders migrations canonically", () => {
-    expect(migrationNames).toEqual(["001_logs", "002_attr_val_name_index", "003_purge_jobs"]);
+    expect(migrationNames).toEqual(["001_logs", "002_attr_val_name_index", "003_purge_jobs", "004_e2e_clients"]);
   });
 
   it("every migration has an up and a down", () => {
@@ -90,6 +90,6 @@ describe("down()", () => {
 
   it("does not mutate the shared migrationNames order", async () => {
     await down(makeRecordingDb([]));
-    expect(migrationNames).toEqual(["001_logs", "002_attr_val_name_index", "003_purge_jobs"]);
+    expect(migrationNames).toEqual(["001_logs", "002_attr_val_name_index", "003_purge_jobs", "004_e2e_clients"]);
   });
 });

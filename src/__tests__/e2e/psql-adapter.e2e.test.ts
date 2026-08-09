@@ -103,7 +103,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await sql`truncate logs, log_attr, log_attr_blob, log_purge_job, log_purge_ids restart identity cascade`.execute(db);
+  await sql`truncate logs, log_attr, log_attr_blob, log_purge_job, log_purge_ids, log_e2e_clients restart identity cascade`.execute(db);
 });
 
 describe("PostgresAdapter e2e — schema", () => {
@@ -779,5 +779,80 @@ describe("PostgresAdapter e2e — $level severity ranges", () => {
 
   it("level sets are just ORs of exact matches", async () => {
     expect(await search("$level:='warn' || $level:='debug'")).toEqual(["careful", "noise"]);
+  });
+});
+
+describe("PostgresAdapter e2e — durable E2E registration store", () => {
+  it("full restart-stability: psql store + persisted keys verify old shipments with no re-registration", async () => {
+    const { createE2EServerContext, createLogRegistrationHandler, createLogIngestHandler, generateE2EServerKeys } =
+      await import("../../server/index");
+    const { PsqlE2ERegistrationStore } = await import("../../adapters/psql/e2e-store");
+    const { HttpAdapter } = await import("../../adapters/http/adapter");
+    const { createLogger } = await import("../../logger/logger");
+
+    const keys = await generateE2EServerKeys();
+    const store = new PsqlE2ERegistrationStore(db);
+    const makeServer = () => {
+      const ctx = createE2EServerContext({ keys, store });
+      return {
+        register: createLogRegistrationHandler(ctx),
+        ingest: createLogIngestHandler({ logger: serverLogger, encryption: { context: ctx } }),
+      };
+    };
+    const serverLogger = createLogger();
+    serverLogger.addAdapter(adapter); // into live Postgres
+
+    let generation = makeServer();
+    const calls: string[] = [];
+    const realFetch = fetch;
+    // Route the shipper into whichever server "generation" is current.
+    (globalThis as { fetch: typeof fetch }).fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push(u.endsWith("/register") ? "register" : "ship");
+      const req = new Request(u, init);
+      return u.endsWith("/register") ? generation.register(req) : generation.ingest(req);
+    }) as typeof fetch;
+
+    try {
+      const ship = new HttpAdapter({
+        endpoint: "https://logs.example/api/logs",
+        flushInterval: 0,
+        encryption: { clientId: "durable-client" },
+      });
+      ship.write(rec("info", "before-restart", { phase: "1" }));
+      await ship.flush();
+
+      // "Restart": a brand-new context — but same keys + same psql store.
+      generation = makeServer();
+
+      ship.write(rec("info", "after-restart", { phase: "2" }));
+      await ship.flush();
+
+      // NO second registration was needed — the row survived in Postgres.
+      expect(calls.filter((c) => c === "register")).toHaveLength(1);
+      await adapter.flush();
+      const rows = await adapter.query({});
+      expect(rows.ok && rows.val.map((r) => r.message).sort()).toEqual([
+        "after-restart",
+        "before-restart",
+      ]);
+
+      // Pinning holds against the durable store: a different key conflicts.
+      const res = await generation.register(
+        new Request("https://logs.example/api/logs/register", {
+          method: "POST",
+          body: JSON.stringify({
+            clientId: "durable-client",
+            algo: "ecdh-p256+a256gcm+ecdsa-p256",
+            signingKey: (
+              await (await import("../../adapters/http/e2e-client")).generateE2ESigningKeys()
+            ).publicJwk,
+          }),
+        }),
+      );
+      expect(res.status).toBe(409);
+    } finally {
+      (globalThis as { fetch: typeof fetch }).fetch = realFetch;
+    }
   });
 });

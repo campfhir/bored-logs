@@ -123,6 +123,14 @@ interface LogPurgeIdsTable {
   log_id: string;
 }
 
+/** Durable E2E client registrations (migration 004). */
+interface LogE2EClientsTable {
+  client_id: string;
+  signing_key_jwk: string;
+  algo: string;
+  registered_at: Date | Generated<Date>;
+}
+
 /**
  * Minimal Kysely DB interface required by this package.
  * Your application DB type must include (at minimum) these tables.
@@ -134,6 +142,7 @@ export interface LoggerTables {
   selected_attributes: TempTableSelectedAttributes;
   log_purge_job: LogPurgeJobTable;
   log_purge_ids: LogPurgeIdsTable;
+  log_e2e_clients: LogE2EClientsTable;
 }
 
 /** A selected row from the `logs` table. */
@@ -1536,7 +1545,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema = current_schema()
-        AND table_name IN ('logs', 'log_attr', 'log_attr_blob', 'log_purge_job', 'log_purge_ids')
+        AND table_name IN ('logs', 'log_attr', 'log_attr_blob', 'log_purge_job', 'log_purge_ids', 'log_e2e_clients')
     `.execute(this._db);
     const existingTables = new Set(tables.rows.map((r) => r.table_name));
 
@@ -1564,6 +1573,10 @@ export class PostgresAdapter implements QueryableLogAdapter {
         name: "003_purge_jobs",
         applied:
           existingTables.has("log_purge_job") && existingTables.has("log_purge_ids"),
+      },
+      {
+        name: "004_e2e_clients",
+        applied: existingTables.has("log_e2e_clients"),
       },
     ];
   }
@@ -1977,3 +1990,6 @@ export class PostgresAdapter implements QueryableLogAdapter {
     });
   }
 }
+
+// ── End-to-end encryption (durable registration store) ─────────────────────
+export { PsqlE2ERegistrationStore } from "./e2e-store";
