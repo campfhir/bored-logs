@@ -46,10 +46,17 @@ q "cart.items[*].sku:='D-4' cart.total:>'50'" # objects in arrays + numeric comp
 q "debugTrace:'trace'"                       # 0 rows — redact() never left App A
 ```
 
+## End-to-end encryption
+
+The demo ships **encrypted**: `app-a` sets `encryption: { clientId: "app-a" }`, so every batch leaves Deno as AES-256-GCM ciphertext with the `x-bored-logs-*` envelope headers, signed with the client's ECDSA key. `server-b` mounts the registration endpoint at `/api/logs/register` (behind the same bearer check as ingest — registration is trust-on-first-use) and passes the shared `createE2EServerContext()` to the ingest handler, which verifies the signature, checks freshness + replay, and decrypts before the normal pipeline.
+
+Try the self-healing: while `app-a` is running (`ORDERS=200 deno task start`), restart `server-b`. The new process generates fresh keys and an empty registration store — the shipper hits `401 unknown-client`, transparently re-registers, and continues without losing a record. Persist keys across restarts with `await e2e.exportKeys()`.
+
 ## What to look for
 
 - **Source identity** — every record carries App A's `application` / `version` (plus the `region` global attribute), so one database serves many apps and `application:'app-a'` isolates them.
 - **`transform` enrichment** — the server stamps `shippedFrom` onto each record from the request.
 - **Sensitivity across the wire** — `paymentToken` was `secure()` (shipped tagged, `[secure]` in the message; encrypted at rest if the server's `PostgresAdapter` is given `encrypt`/`decrypt`), while `debugTrace` was `redact()` and never crossed the wire.
+- **End-to-end encryption** — the wire carries only ciphertext + envelope headers; run `server-b` with a proxy/tcpdump between the two and there is no JSON to read. `redact()` still never leaves App A; `secure()` plaintext is now ALSO protected in transit beyond TLS.
 - **Batch-size negotiation** — every ingest response advertises `x-log-max-batch`; the `HttpAdapter` learns it and chunks, so shipper and server never need manual alignment.
 - **Auth** — one bearer token (`LOG_SHIP_TOKEN`, default `demo-secret`) checked before the handler runs.

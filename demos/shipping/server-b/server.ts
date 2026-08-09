@@ -15,7 +15,11 @@
 import express from "express";
 import { Kysely, PostgresDialect } from "kysely";
 import { createLogger, ConsoleAdapter, parseLogQueryExpr } from "@campfhir/bored-logs";
-import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import {
+  createLogIngestHandler,
+  createLogRegistrationHandler,
+  createE2EServerContext,
+} from "@campfhir/bored-logs/server";
 import { PostgresAdapter, createLoggerPool, type LoggerTables } from "@campfhir/bored-logs/adapters/psql";
 
 const PORT = Number(process.env.PORT ?? 4600);
@@ -34,10 +38,19 @@ const logger = createLogger({ application: "log-server", version: "1.0.0" });
 logger.addAdapter(new ConsoleAdapter({ showTimestamp: false }));
 logger.addAdapter(adapter);
 
+// ── End-to-end encryption ──────────────────────────────────────────────────
+// One shared context feeds both the registration endpoint and the ingest
+// handler. Keys are generated at boot (a restart rotates them — shippers
+// detect it and transparently re-register); persist across restarts with
+// `await e2e.exportKeys()` and pass the result back as `keys`.
+const e2e = createE2EServerContext();
+const register = createLogRegistrationHandler(e2e);
+
 // ── Ingest endpoint ────────────────────────────────────────────────────────
 const ingest = createLogIngestHandler({
   logger,
   maxBatch: 100, // advertised to shippers on every response — they negotiate down
+  encryption: { context: e2e }, // decrypt + verify before the normal pipeline
   // Enrich each shipped record with request-derived data.
   transform: (record, req) => ({
     ...record,
@@ -65,6 +78,15 @@ async function toFetchHandler(
 }
 
 const app = express();
+
+// Registration (TOFU — protected by the SAME bearer check as ingest).
+app.post("/api/logs/register", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
+  if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  await toFetchHandler(register, req, res);
+});
 
 app.post("/api/logs", express.raw({ type: "*/*", limit: "5mb" }), async (req, res) => {
   if (req.headers.authorization !== `Bearer ${TOKEN}`) {

@@ -21,6 +21,12 @@ const ship = new HttpAdapter({
   headers: { authorization: `Bearer ${TOKEN}` },
   batchSize: 10, // the server advertises its own max; the adapter negotiates
   flushInterval: 1000,
+  // End-to-end encryption: batches are sealed (ECDH → AES-GCM) and signed
+  // (ECDSA) before leaving this process — the wire carries only ciphertext
+  // plus the x-bored-logs-* envelope. Registration happens automatically on
+  // the first flush; if the log server restarts, the adapter transparently
+  // re-registers. Runs on Deno's WebCrypto — same code as browser/Node/Edge.
+  encryption: { clientId: "app-a" },
   onError: (err) => console.error("[app-a] log shipment failed:", err),
 });
 
