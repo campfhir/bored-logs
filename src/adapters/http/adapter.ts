@@ -17,6 +17,8 @@ import type { LogAdapter, LogRecord } from "../../logger/adapter";
 import { LOG_LEVELS } from "../../logger/adapter";
 import type { ValueSerializer } from "../../logger/template";
 import type { ClientLogRecord, LogShipmentPayload } from "./types";
+import { E2EClientSession, type E2ESigningKeysJwk } from "./e2e-client";
+import { E2E_ERROR_HEADER } from "./e2e-wire";
 import { recordToClientRecord, type RedactMode } from "./record";
 
 /** Extra request headers, or a (possibly async) function returning them — e.g. to attach an auth token or CSRF header per flush. */
@@ -64,6 +66,28 @@ export type HttpAdapterOptions = {
   redactPlaceholder?: string;
   /** Called when a flush fails; the failed batch is re-queued for the next attempt. */
   onError?: (err: unknown, logs: ClientLogRecord[]) => void;
+  /**
+   * Opt-in end-to-end shipment encryption. The batch is encrypted
+   * (ECDH P-256 → HKDF → AES-256-GCM, fresh ephemeral key per POST) and
+   * signed (ECDSA P-256); the ciphertext ships as the raw body with the
+   * envelope in `x-bored-logs-*` headers. The adapter registers itself at
+   * the registration endpoint on first flush and transparently re-registers
+   * when the server forgets it (restart) or rotates its key. Incompatible
+   * with `transport` (which would receive plaintext) — combining them throws.
+   * On page unload, `sendBeacon` is never used; records that cannot be
+   * sealed are DROPPED, never sent in the clear.
+   */
+  encryption?: HttpE2EOptions;
+};
+
+/** Configuration for {@link HttpAdapterOptions.encryption}. */
+export type HttpE2EOptions = {
+  /** Registration endpoint URL. Defaults to `endpoint` + `/register`. */
+  registrationEndpoint?: string;
+  /** Stable client identity. Defaults to a random UUID per session. */
+  clientId?: string;
+  /** Persistent signing identity (see {@link generateE2ESigningKeys}); omitted → per-session. */
+  signingKeys?: E2ESigningKeysJwk;
 };
 
 const DEFAULTS = {
@@ -82,14 +106,23 @@ export class HttpAdapter implements LogAdapter {
   private _timer: ReturnType<typeof setInterval> | null = null;
   /** Server-advertised max records per shipment (learned from responses). */
   private _serverMaxBatch: number | null = null;
+  /** E2E session — lazily created, survives setOptions unless its config changes. */
+  private _e2e: E2EClientSession | null = null;
 
   constructor(opts: HttpAdapterOptions) {
+    assertNoTransportWithEncryption(opts);
     this._opts = opts;
     this._levels = { ...LOG_LEVELS, ...opts.levels };
   }
 
   /** Merge fresh options in (e.g. when `LoggerProvider` props change). */
   setOptions(opts: HttpAdapterOptions): void {
+    assertNoTransportWithEncryption(opts);
+    // The E2E session (and its registration) survives option churn unless the
+    // fields that define it change — LoggerProvider re-commits every render.
+    if (this._e2e && e2eConfigKey(opts) !== e2eConfigKey(this._opts)) {
+      this._e2e = null;
+    }
     this._opts = opts;
     this._levels = { ...this._levels, ...opts.levels };
   }
@@ -101,6 +134,22 @@ export class HttpAdapter implements LogAdapter {
 
   private get _endpoint(): string {
     return this._opts.endpoint;
+  }
+
+  /** The E2E session for the current options (created on first use). */
+  private _session(): E2EClientSession {
+    if (!this._e2e) {
+      const enc = this._opts.encryption!;
+      this._e2e = new E2EClientSession({
+        registrationEndpoint:
+          enc.registrationEndpoint ?? `${this._endpoint.replace(/\/+$/, "")}/register`,
+        clientId: enc.clientId ?? generateClientId(),
+        signingKeys: enc.signingKeys,
+        resolveHeaders: () => resolveHeaders(this._opts.headers),
+        credentials: this._opts.credentials,
+      });
+    }
+    return this._e2e;
   }
   private get _batchSize(): number {
     return this._opts.batchSize ?? DEFAULTS.batchSize;
@@ -176,21 +225,56 @@ export class HttpAdapter implements LogAdapter {
     // Safety valve: a pathological server limit of 1 against a full queue
     // means many sequential posts — cap the per-flush drain and leave the
     // remainder for the next flush rather than looping unbounded.
+    let reRegistered = false;
     for (let posts = 0; this._queue.length > 0 && posts < 100; posts++) {
       const size = Math.min(this._queue.length, this._serverMaxBatch ?? this._queue.length);
       const batch = this._queue.splice(0, size);
 
       try {
         const extra = await resolveHeaders(this._opts.headers);
-        const res = await fetch(this._endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json", ...extra },
-          body: JSON.stringify({ logs: batch } satisfies LogShipmentPayload),
-          credentials: this._opts.credentials,
-          // Let a short send outlive a navigation, so we lose fewer records.
-          keepalive: true,
-        });
-        this._learnMaxBatch(res);
+        let res: Response;
+        if (this._opts.encryption) {
+          const session = this._session();
+          await session.ensureRegistered();
+          const sealed = await session.seal(
+            new TextEncoder().encode(JSON.stringify({ logs: batch } satisfies LogShipmentPayload)),
+          );
+          res = await fetch(this._endpoint, {
+            method: "POST",
+            // E2E headers and content-type spread LAST — user headers cannot
+            // displace the envelope.
+            headers: { ...extra, ...sealed.headers, "content-type": "application/octet-stream" },
+            body: sealed.body as BodyInit,
+            credentials: this._opts.credentials,
+            keepalive: true,
+          });
+          this._learnMaxBatch(res);
+
+          // Server restart (unknown-client) or key rotation (decrypt-failed):
+          // reset, re-register, retry this chunk — once per flush, mirroring
+          // the 413 recovery below.
+          const e2eCode = res.headers?.get?.(E2E_ERROR_HEADER);
+          if (
+            !res.ok &&
+            (e2eCode === "unknown-client" || e2eCode === "decrypt-failed") &&
+            !reRegistered
+          ) {
+            reRegistered = true;
+            this._queue.unshift(...batch);
+            session.reset();
+            continue;
+          }
+        } else {
+          res = await fetch(this._endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...extra },
+            body: JSON.stringify({ logs: batch } satisfies LogShipmentPayload),
+            credentials: this._opts.credentials,
+            // Let a short send outlive a navigation, so we lose fewer records.
+            keepalive: true,
+          });
+          this._learnMaxBatch(res);
+        }
 
         if (res.status === 413) {
           // Too large: put the chunk back (order intact) and retry smaller.
@@ -239,6 +323,18 @@ export class HttpAdapter implements LogAdapter {
    */
   flushBeacon(): void {
     if (this._queue.length === 0) return;
+    if (this._opts.encryption) {
+      // sendBeacon cannot carry the envelope headers and cannot await
+      // WebCrypto — with encryption on, the unload tail goes through an
+      // async seal + keepalive fetch, and records that cannot be sealed are
+      // DROPPED rather than ever sent in the clear.
+      while (this._queue.length > 0) {
+        const size = Math.min(this._queue.length, this._serverMaxBatch ?? this._queue.length);
+        const chunk = this._queue.splice(0, size);
+        void this._sealAndSendUnload(chunk);
+      }
+      return;
+    }
     // Respect the learned server limit — an oversized beacon would bounce
     // with 413 and, on unload, there is no retry.
     if (this._serverMaxBatch != null && this._queue.length > this._serverMaxBatch) {
@@ -250,6 +346,36 @@ export class HttpAdapter implements LogAdapter {
     const batch = this._queue.splice(0, this._queue.length);
     if (batch.length === 0) return;
     this._sendBeaconChunk(batch);
+  }
+
+  /**
+   * Best-effort ENCRYPTED unload delivery: seal (only if the session already
+   * registered — no registration attempts while the page is going away) and
+   * fire a keepalive fetch. Failures drop the records and notify `onError`;
+   * nothing is ever sent unencrypted.
+   */
+  private async _sealAndSendUnload(batch: ClientLogRecord[]): Promise<void> {
+    const session = this._e2e;
+    try {
+      if (!session?.isReady) {
+        throw new Error(
+          "[bored-logs] e2e session not registered at unload — records dropped (never sent in the clear)",
+        );
+      }
+      const extra = await resolveHeaders(this._opts.headers);
+      const sealed = await session.seal(
+        new TextEncoder().encode(JSON.stringify({ logs: batch } satisfies LogShipmentPayload)),
+      );
+      void fetch(this._endpoint, {
+        method: "POST",
+        headers: { ...extra, ...sealed.headers, "content-type": "application/octet-stream" },
+        body: sealed.body as BodyInit,
+        credentials: this._opts.credentials,
+        keepalive: true,
+      }).catch(() => {});
+    } catch (err) {
+      this._opts.onError?.(err, batch);
+    }
   }
 
   /** Best-effort delivery of one chunk via sendBeacon (keepalive fetch fallback). */
@@ -322,6 +448,37 @@ export class HttpAdapter implements LogAdapter {
   }
 }
 
+/** Combining a custom transport with encryption would hand it PLAINTEXT — refuse loudly. */
+function assertNoTransportWithEncryption(opts: HttpAdapterOptions): void {
+  if (opts.transport && opts.encryption) {
+    throw new TypeError(
+      "[bored-logs] `transport` and `encryption` cannot be combined — a custom " +
+        "transport receives the structured plaintext payload, which would bypass " +
+        "end-to-end encryption. Drop one of the two options.",
+    );
+  }
+}
+
+/** Identity of an E2E session — changing any of these fields discards it. */
+function e2eConfigKey(opts: HttpAdapterOptions): string {
+  const e = opts.encryption;
+  if (!e) return "";
+  return JSON.stringify([
+    opts.endpoint,
+    e.registrationEndpoint ?? null,
+    e.clientId ?? null,
+    e.signingKeys?.publicJwk?.x ?? null,
+    e.signingKeys?.publicJwk?.y ?? null,
+  ]);
+}
+
+/** Random client id (crypto.randomUUID with a portable fallback). */
+function generateClientId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /** Resolve the {@link HeadersInput} union into a plain header map. */
 async function resolveHeaders(
   headers: HeadersInput | undefined,
@@ -329,3 +486,9 @@ async function resolveHeaders(
   if (!headers) return {};
   return typeof headers === "function" ? await headers() : headers;
 }
+
+// ── End-to-end encryption re-exports (this file is the package entry) ──────
+export { generateE2ESigningKeys, E2EClientSession } from "./e2e-client";
+export type { E2ESigningKeysJwk, E2EClientSessionOptions, SealedShipment } from "./e2e-client";
+export { E2E_HEADERS, E2E_ERROR_HEADER, E2E_ALGO_V1 } from "./e2e-wire";
+export type { E2EErrorCode } from "./e2e-wire";
