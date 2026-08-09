@@ -50,6 +50,8 @@ q "debugTrace:'trace'"                       # 0 rows — redact() never left Ap
 
 The demo ships **encrypted**: `app-a` sets `encryption: { clientId: "app-a" }`, so every batch leaves Deno as AES-256-GCM ciphertext with the `x-bored-logs-*` envelope headers, signed with the client's ECDSA key. `server-b` mounts the registration endpoint at `/api/logs/register` (behind the same bearer check as ingest — registration is trust-on-first-use) and passes the shared `createE2EServerContext()` to the ingest handler, which verifies the signature, checks freshness + replay, and decrypts before the normal pipeline.
 
+`app-a` keeps a persistent signing identity in `app-a/app-a-keys.json` (generated on first run, gitignored) — required because registration is **pinned**: the server binds `app-a` to its first signing key and refuses a different one (`409 client-key-conflict`), so an attacker who can reach the endpoint cannot take the identity over. The registration route is additionally gated by the `authorize` hook (same bearer token as ingest).
+
 Try the self-healing: while `app-a` is running (`ORDERS=200 deno task start`), restart `server-b`. The new process generates fresh keys and an empty registration store — the shipper hits `401 unknown-client`, transparently re-registers, and continues without losing a record. Persist keys across restarts with `await e2e.exportKeys()`.
 
 ## What to look for

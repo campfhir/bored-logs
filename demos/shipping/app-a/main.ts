@@ -10,7 +10,22 @@
  *   ORDERS=100 deno task start
  */
 import { createLogger, ConsoleAdapter, secure, redact } from "@campfhir/bored-logs";
-import { HttpAdapter } from "@campfhir/bored-logs/adapters/http";
+import { HttpAdapter, generateE2ESigningKeys } from "@campfhir/bored-logs/adapters/http";
+
+// Persistent signing identity: the log server PINS a clientId to its first
+// signing key, so a stable clientId needs a stable key. Generated once and
+// kept next to this file (gitignored).
+const KEYS_FILE = new URL("./app-a-keys.json", import.meta.url).pathname;
+async function loadOrCreateSigningKeys() {
+  try {
+    return JSON.parse(await Deno.readTextFile(KEYS_FILE));
+  } catch {
+    const keys = await generateE2ESigningKeys();
+    await Deno.writeTextFile(KEYS_FILE, JSON.stringify(keys));
+    console.error(`[app-a] generated a new signing identity → ${KEYS_FILE}`);
+    return keys;
+  }
+}
 
 const LOG_SERVER = Deno.env.get("LOG_SERVER_URL") ?? "http://localhost:4600";
 const TOKEN = Deno.env.get("LOG_SHIP_TOKEN") ?? "demo-secret";
@@ -26,7 +41,7 @@ const ship = new HttpAdapter({
   // plus the x-bored-logs-* envelope. Registration happens automatically on
   // the first flush; if the log server restarts, the adapter transparently
   // re-registers. Runs on Deno's WebCrypto — same code as browser/Node/Edge.
-  encryption: { clientId: "app-a" },
+  encryption: { clientId: "app-a", signingKeys: await loadOrCreateSigningKeys() },
   onError: (err) => console.error("[app-a] log shipment failed:", err),
 });
 

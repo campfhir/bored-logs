@@ -43,8 +43,16 @@ logger.addAdapter(adapter);
 // handler. Keys are generated at boot (a restart rotates them — shippers
 // detect it and transparently re-register); persist across restarts with
 // `await e2e.exportKeys()` and pass the result back as `keys`.
+// Registrations are PINNED by default (a clientId cannot be re-claimed with
+// a different key), and held in memory here — swap in the durable store with:
+//   import { PsqlE2ERegistrationStore } from "@campfhir/bored-logs/adapters/psql";
+//   createE2EServerContext({ store: new PsqlE2ERegistrationStore(db) })
 const e2e = createE2EServerContext();
-const register = createLogRegistrationHandler(e2e);
+const register = createLogRegistrationHandler(e2e, {
+  // TOFU protection: the same bearer token as ingest, enforced inside the
+  // handler as well as by the Express route wrapper below.
+  authorize: (request) => request.headers.get("authorization") === `Bearer ${TOKEN}`,
+});
 
 // ── Ingest endpoint ────────────────────────────────────────────────────────
 const ingest = createLogIngestHandler({

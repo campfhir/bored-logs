@@ -27,3 +27,6 @@ Thumbs.db
 # Test / coverage
 coverage/
 .vitest-cache/
+
+# Demo E2E client identities (generated at first run)
+demos/shipping/app-a/app-a-keys.json

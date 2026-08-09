@@ -122,7 +122,16 @@ export class E2EClientSession {
       credentials: this._opts.credentials,
     });
     if (!res.ok) {
-      throw new Error(`[bored-logs] e2e registration failed: HTTP ${res.status}`);
+      // Surface the server's machine-readable code (e.g. client-key-conflict,
+      // unauthorized) so the failure is diagnosable from the error alone.
+      const code = res.headers.get("x-bored-logs-error");
+      throw new Error(
+        `[bored-logs] e2e registration failed: HTTP ${res.status}${code ? ` (${code})` : ""}` +
+          (code === "client-key-conflict"
+            ? " — this clientId is pinned to a different signing key; use persistent " +
+              "signingKeys, or rotate via store.delete(clientId) on the server"
+            : ""),
+      );
     }
     const body = (await res.json()) as { serverKey?: JsonWebKey };
     if (!body.serverKey) {
