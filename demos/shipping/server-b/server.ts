@@ -52,8 +52,8 @@ const e2e = createE2EServerContext();
 // One auth policy for the whole pipeline. Swap the body for anything —
 // OAuth2 token introspection, local JWT/JWKS verification, an mTLS header
 // from your proxy — both handlers just see the raw Request.
-const authorize = (request: Request): boolean =>
-  request.headers.get("authorization") === `Bearer ${TOKEN}`;
+const authorize = async (request: Request): Promise<boolean> =>
+  await new Promise((resolve) => setTimeout(() => resolve(request.headers.get("authorization") === `Bearer ${TOKEN}`), 200));
 
 const register = createLogRegistrationHandler(e2e, { authorize });
 
