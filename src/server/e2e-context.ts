@@ -93,6 +93,15 @@ export type E2EServerContextOptions = {
   clockSkewMs?: number;
   /** Anti-replay nonce cache capacity (oldest evicted past it). Default 10 000. */
   nonceCacheSize?: number;
+  /**
+   * Key-continuity policy. `"pinned"` (default): once a clientId is
+   * registered, re-registration with the SAME signing key is idempotent
+   * (restart recovery), but a DIFFERENT key is refused with
+   * `client-key-conflict` — an attacker who can reach the endpoint cannot
+   * take over an existing identity. Deliberate client-key rotation =
+   * `store.delete(clientId)` first. `"open"` restores last-write-wins.
+   */
+  registration?: "pinned" | "open";
 };
 
 /** The result of {@link E2EServerContext.open}. */
@@ -116,6 +125,14 @@ export type E2EServerContext = {
   open(request: Request): Promise<E2EOpenResult>;
   /** Export the server keypair (JWK) for persistence across restarts. */
   exportKeys(): Promise<E2EKeyPairJwk>;
+  /**
+   * Rotate the server's ECDH keypair, returning the NEW pair for
+   * persistence. In-flight shipments sealed against the old key answer
+   * `decrypt-failed`, which makes clients transparently re-register and
+   * fetch the new key — rotating on a schedule shrinks the
+   * capture-then-decrypt window to one rotation period.
+   */
+  rotateKeys(): Promise<E2EKeyPairJwk>;
 };
 
 /** Generate a fresh server ECDH P-256 keypair as portable JWKs. */
@@ -133,6 +150,7 @@ export function createE2EServerContext(options: E2EServerContextOptions = {}): E
   const store = options.store ?? new MemoryRegistrationStore();
   const clockSkewMs = options.clockSkewMs ?? 300_000;
   const nonceCacheSize = options.nonceCacheSize ?? 10_000;
+  const registrationMode = options.registration ?? "pinned";
 
   // Nonce LRU: insertion-ordered Map, key `${clientId}:${nonce}` → seen-at ms.
   const nonces = new Map<string, number>();
@@ -150,27 +168,36 @@ export function createE2EServerContext(options: E2EServerContextOptions = {}): E
     }
   };
 
-  // Lazy server keypair (WebCrypto is async; the factory is sync).
-  let keysPromise: Promise<{ privateKey: CryptoKey; publicJwk: JsonWebKey; publicRawB64: string }> | null =
-    null;
+  // Lazy, ROTATABLE server keypair (WebCrypto is async; the factory is sync).
+  type ServerKeys = {
+    privateKey: CryptoKey;
+    publicJwk: JsonWebKey;
+    privateJwk: JsonWebKey;
+    publicRawB64: string;
+  };
+  let keysPromise: Promise<ServerKeys> | null = null;
+  const materialize = async (pair: CryptoKeyPair): Promise<ServerKeys> => {
+    const subtle = getSubtle();
+    return {
+      privateKey: pair.privateKey,
+      publicJwk: await subtle.exportKey("jwk", pair.publicKey),
+      privateJwk: await subtle.exportKey("jwk", pair.privateKey),
+      publicRawB64: toBase64Url(await exportPublicKeyRaw(pair.publicKey)),
+    };
+  };
   const keys = () => {
     keysPromise ??= (async () => {
-      const subtle = getSubtle();
       if (options.keys) {
         const privateKey = await importEcdhPrivateJwk(options.keys.privateJwk);
         const publicKey = await importEcdhPublicJwk(options.keys.publicJwk);
         return {
           privateKey,
           publicJwk: options.keys.publicJwk,
+          privateJwk: options.keys.privateJwk,
           publicRawB64: toBase64Url(await exportPublicKeyRaw(publicKey)),
         };
       }
-      const pair = await generateEcdhKeyPair();
-      return {
-        privateKey: pair.privateKey,
-        publicJwk: await subtle.exportKey("jwk", pair.publicKey),
-        publicRawB64: toBase64Url(await exportPublicKeyRaw(pair.publicKey)),
-      };
+      return materialize(await generateEcdhKeyPair());
     })();
     return keysPromise;
   };
@@ -190,6 +217,23 @@ export function createE2EServerContext(options: E2EServerContextOptions = {}): E
         await importEcdsaPublicJwk(signingKey); // validates shape + curve, rejects private material
       } catch (err) {
         return { ok: false, code: "bad-e2e-headers", error: `invalid signingKey: ${String(err)}` };
+      }
+      if (registrationMode === "pinned") {
+        const existing = await store.get(clientId);
+        if (
+          existing &&
+          (existing.signingKeyJwk.x !== signingKey.x || existing.signingKeyJwk.y !== signingKey.y)
+        ) {
+          return {
+            ok: false,
+            code: "client-key-conflict",
+            error:
+              `clientId ${JSON.stringify(clientId)} is already registered with a different ` +
+              `signing key. Give the client a persistent identity (generateE2ESigningKeys), ` +
+              `or rotate deliberately via store.delete(clientId), or opt into ` +
+              `registration: "open".`,
+          };
+        }
       }
       await store.set({ clientId, signingKeyJwk: signingKey, algo, registeredAt: Date.now() });
       return { ok: true, serverKeyJwk: (await keys()).publicJwk };
@@ -279,11 +323,14 @@ export function createE2EServerContext(options: E2EServerContextOptions = {}): E
     },
 
     async exportKeys() {
-      const subtle = getSubtle();
       const k = await keys();
-      // The private key was imported/generated as extractable for this purpose.
-      const privateJwk = options.keys?.privateJwk ?? (await subtle.exportKey("jwk", k.privateKey));
-      return { publicJwk: k.publicJwk, privateJwk };
+      return { publicJwk: k.publicJwk, privateJwk: k.privateJwk };
+    },
+
+    async rotateKeys() {
+      const next = await materialize(await generateEcdhKeyPair());
+      keysPromise = Promise.resolve(next);
+      return { publicJwk: next.publicJwk, privateJwk: next.privateJwk };
     },
   };
 }

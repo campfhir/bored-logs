@@ -16,13 +16,30 @@
 import type { E2EServerContext } from "./e2e-context";
 import { E2E_ERROR_HEADER } from "../adapters/http/e2e-wire";
 
+/** Options for {@link createLogRegistrationHandler}. */
+export type LogRegistrationHandlerOptions = {
+  /**
+   * Gate registrations (checked BEFORE anything touches the store) — the
+   * one-line way to front the TOFU endpoint with the same auth as ingest.
+   * Return false to answer 401.
+   */
+  authorize?: (request: Request) => boolean | Promise<boolean>;
+};
+
 /** Build the registration Fetch handler bound to a shared {@link E2EServerContext}. */
 export function createLogRegistrationHandler(
   context: E2EServerContext,
+  options: LogRegistrationHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
   return async function handler(request: Request): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405, headers: { allow: "POST" } });
+    }
+    if (options.authorize && !(await options.authorize(request))) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: "unauthorized" },
+      });
     }
 
     let body: unknown;
@@ -49,7 +66,12 @@ export function createLogRegistrationHandler(
       algo,
       signingKey: signingKey as JsonWebKey,
     });
-    if (!result.ok) return registrationError(result.code, result.error, context);
+    if (!result.ok) {
+      // A key-continuity conflict is the caller's misconfiguration (or an
+      // attempted takeover) — 409, distinct from validation errors.
+      const status = result.code === "client-key-conflict" ? 409 : 400;
+      return registrationError(result.code, result.error, context, status);
+    }
 
     return new Response(
       JSON.stringify({ clientId, algo, serverKey: result.serverKeyJwk }),
@@ -58,9 +80,14 @@ export function createLogRegistrationHandler(
   };
 }
 
-function registrationError(code: string, error: string, context: E2EServerContext): Response {
+function registrationError(
+  code: string,
+  error: string,
+  context: E2EServerContext,
+  status = 400,
+): Response {
   return new Response(JSON.stringify({ error, supportedAlgos: [...context.algos] }), {
-    status: 400,
+    status,
     headers: { "content-type": "application/json", [E2E_ERROR_HEADER]: code },
   });
 }

@@ -35,5 +35,6 @@ export type {
   E2EOpenResult,
 } from "./e2e-context";
 export { createLogRegistrationHandler } from "./registration-handler";
+export type { LogRegistrationHandlerOptions } from "./registration-handler";
 export { E2E_HEADERS, E2E_ERROR_HEADER, E2E_ALGO_V1 } from "../adapters/http/e2e-wire";
 export type { E2EErrorCode } from "../adapters/http/e2e-wire";

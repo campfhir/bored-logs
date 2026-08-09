@@ -61,7 +61,11 @@ export type E2EErrorCode =
   | "stale-timestamp"
   | "bad-e2e-headers"
   | "encryption-required"
-  | "unsupported-algo";
+  | "unsupported-algo"
+  /** Pinned registration: the clientId is already bound to a DIFFERENT signing key. */
+  | "client-key-conflict"
+  /** The registration `authorize` hook refused the request. */
+  | "unauthorized";
 
 // ---------------------------------------------------------------------------
 // Runtime access

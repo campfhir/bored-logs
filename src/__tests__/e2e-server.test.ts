@@ -59,6 +59,28 @@ async function registerTestClient(
   return { clientId, signing, serverKeyJwk: body.serverKey };
 }
 
+/** Re-register an existing client (same signing key), refreshing its server key. */
+async function registerTestClient2(
+  ctx: ReturnType<typeof createE2EServerContext>,
+  client: TestClient,
+): Promise<TestClient> {
+  const handler = createLogRegistrationHandler(ctx);
+  const res = await handler(
+    new Request("http://x/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: client.clientId,
+        algo: E2E_ALGO_V1,
+        signingKey: await crypto.subtle.exportKey("jwk", client.signing.publicKey),
+      }),
+    }),
+  );
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  return { ...client, serverKeyJwk: body.serverKey };
+}
+
 /** Seal a payload exactly as the wire spec prescribes, with tamper hooks. */
 async function seal(
   client: TestClient,
@@ -182,22 +204,7 @@ describe("createLogRegistrationHandler", () => {
     expect(badJwk.status).toBe(400);
   });
 
-  it("upserts: re-registration replaces the signing key (last write wins)", async () => {
-    const ctx = createE2EServerContext();
-    const first = await registerTestClient(ctx, "same-id");
-    const second = await registerTestClient(ctx, "same-id");
 
-    const { logger } = makeCapture();
-    const ingest = createLogIngestHandler({ logger, encryption: { context: ctx } });
-
-    // A shipment signed with the OLD key must now fail signature verification.
-    const stale = await ingest(await seal(first, { logs: [wireRecord()] }));
-    expect(stale.status).toBe(401);
-    expect(stale.headers.get(E2E_ERROR_HEADER)).toBe("invalid-signature");
-
-    const fresh = await ingest(await seal(second, { logs: [wireRecord()] }));
-    expect(fresh.status).toBe(200);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -403,5 +410,122 @@ describe("createE2EServerContext", () => {
     expect((await store.get("x"))?.clientId).toBe("x");
     await store.delete("x");
     expect(await store.get("x")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Risk mitigations: key-continuity pinning, authorize hook, key rotation.
+// ---------------------------------------------------------------------------
+
+describe("registration key-continuity (pinned by default)", () => {
+  it("same-key re-registration stays idempotent (restart recovery unharmed)", async () => {
+    const ctx = createE2EServerContext();
+    const signing = await generateEcdsaKeyPair();
+    const jwk = await crypto.subtle.exportKey("jwk", signing.publicKey);
+    const handler = createLogRegistrationHandler(ctx);
+    const register = () =>
+      handler(
+        new Request("http://x/register", {
+          method: "POST",
+          body: JSON.stringify({ clientId: "stable", algo: E2E_ALGO_V1, signingKey: jwk }),
+        }),
+      );
+    expect((await register()).status).toBe(200);
+    expect((await register()).status).toBe(200); // same key → fine
+  });
+
+  it("rejects a DIFFERENT key for a registered clientId with 409 client-key-conflict", async () => {
+    const ctx = createE2EServerContext();
+    await registerTestClient(ctx, "pinned-id");
+    const otherKey = await crypto.subtle.exportKey(
+      "jwk",
+      (await generateEcdsaKeyPair()).publicKey,
+    );
+    const handler = createLogRegistrationHandler(ctx);
+    const res = await handler(
+      new Request("http://x/register", {
+        method: "POST",
+        body: JSON.stringify({ clientId: "pinned-id", algo: E2E_ALGO_V1, signingKey: otherKey }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(res.headers.get(E2E_ERROR_HEADER)).toBe("client-key-conflict");
+  });
+
+  it("registration: 'open' restores last-write-wins for operators who opt out", async () => {
+    const ctx = createE2EServerContext({ registration: "open" });
+    const first = await registerTestClient(ctx, "same-id");
+    const second = await registerTestClient(ctx, "same-id"); // overwrites, no conflict
+
+    const { logger } = makeCapture();
+    const ingest = createLogIngestHandler({ logger, encryption: { context: ctx } });
+    expect((await ingest(await seal(second, { logs: [wireRecord()] }))).status).toBe(200);
+    expect((await ingest(await seal(first, { logs: [wireRecord()] }))).status).toBe(401);
+  });
+
+  it("store.delete unblocks a deliberate client-key rotation under pinning", async () => {
+    const ctx = createE2EServerContext();
+    await registerTestClient(ctx, "rotate-me");
+    await ctx.store.delete("rotate-me");
+    const fresh = await registerTestClient(ctx, "rotate-me"); // new key accepted
+    const { logger } = makeCapture();
+    const ingest = createLogIngestHandler({ logger, encryption: { context: ctx } });
+    expect((await ingest(await seal(fresh, { logs: [wireRecord()] }))).status).toBe(200);
+  });
+});
+
+describe("registration authorize hook", () => {
+  it("rejects with 401 when authorize returns false, before any store write", async () => {
+    const ctx = createE2EServerContext();
+    const handler = createLogRegistrationHandler(ctx, {
+      authorize: (request) => request.headers.get("authorization") === "Bearer ok",
+    });
+    const signing = await generateEcdsaKeyPair();
+    const body = JSON.stringify({
+      clientId: "authed",
+      algo: E2E_ALGO_V1,
+      signingKey: await crypto.subtle.exportKey("jwk", signing.publicKey),
+    });
+
+    const denied = await handler(new Request("http://x/register", { method: "POST", body }));
+    expect(denied.status).toBe(401);
+    expect(await ctx.store.get("authed")).toBeUndefined();
+
+    const allowed = await handler(
+      new Request("http://x/register", {
+        method: "POST",
+        headers: { authorization: "Bearer ok" },
+        body,
+      }),
+    );
+    expect(allowed.status).toBe(200);
+    expect(await ctx.store.get("authed")).toBeTruthy();
+  });
+});
+
+describe("server key rotation", () => {
+  it("rotateKeys swaps the keypair; old shipments fail decrypt-failed, re-registration heals", async () => {
+    const ctx = createE2EServerContext();
+    const client = await registerTestClient(ctx);
+    const { logger, records } = makeCapture();
+    const ingest = createLogIngestHandler({ logger, encryption: { context: ctx } });
+    expect((await ingest(await seal(client, { logs: [wireRecord()] }))).status).toBe(200);
+
+    const before = await ctx.exportKeys();
+    const rotated = await ctx.rotateKeys();
+    expect(rotated.publicJwk.x).not.toBe(before.publicJwk.x);
+    expect((await ctx.exportKeys()).publicJwk.x).toBe(rotated.publicJwk.x);
+
+    // A shipment sealed against the OLD server key: signature still valid,
+    // decryption fails → the client's re-register trigger.
+    const stale = await ingest(await seal(client, { logs: [wireRecord()] }));
+    expect(stale.status).toBe(400);
+    expect(stale.headers.get(E2E_ERROR_HEADER)).toBe("decrypt-failed");
+
+    // Re-register (same signing key — pinning allows it) → fetch the new
+    // server key → shipments work again.
+    const refreshed = await registerTestClient2(ctx, client);
+    expect((await ingest(await seal(refreshed, { logs: [wireRecord()] }))).status).toBe(200);
+    expect(records.length).toBe(2);
   });
 });
