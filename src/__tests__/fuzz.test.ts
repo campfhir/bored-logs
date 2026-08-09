@@ -117,13 +117,11 @@ describe("fuzz: query parsers never throw or hang", () => {
     });
   });
 
-  // Round-trip is fuzzed over tokens with REALISTIC keys (attribute names /
-  // field names — identifiers and valid paths) but HOSTILE values (user data
-  // is arbitrary: quotes, backslashes, newlines, grammar operators). Keys
-  // carrying grammar-operator characters are excluded by design: a bare key
-  // that is also a valid path but needs quoting cannot round-trip its
-  // path-vs-literal classification (quoting *means* literal), and real
-  // attribute names never contain `= < > | & ! : ' " \` or whitespace.
+  // Round-trip is fuzzed over tokens with HOSTILE values (user data is
+  // arbitrary) and a mix of clean keys, valid paths, AND operator-laden keys.
+  // parseAttrPath rejects operator-laden segments (they become flat keys),
+  // so every key here round-trips — a clean path stays a path, everything
+  // else stays a flat name.
   it(`format → parse round-trip holds for ${ITERATIONS} generated tokens`, () => {
     withSeed("roundtrip", BASE_SEED ^ 0xa5a5, (rand) => {
       const OPS = ["contains", "=", ">", ">=", "<", "<="] as const;
@@ -139,6 +137,11 @@ describe("fuzz: query parsers never throw or hang", () => {
         "$message",
         "commit_hash",
         "region-name",
+        // operator-laden keys — flat, not paths; must still round-trip.
+        "c1.|=",
+        "weird=key",
+        "a.b<c",
+        "n|s",
       ];
       const VALUE_CHARS = [..."abc012 -_.", ...`'"\\:=<>!|&()[]`, "\n", "\t"];
 

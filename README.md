@@ -1120,6 +1120,8 @@ session.id:'123'          # path: field `id` inside object attr `session`
 'session.id':'123'        # literal flat attribute named "session.id"
 ```
 
+Path segments are **field-name identifiers** — they may not contain the grammar's operator characters (`= < > ! | & ( ) , ' " \` or whitespace/`:`). JSON permits any string as a property name, but a key like `a.b|c` is treated as a flat attribute name, not a path (only clean segments walk into nested structure). `application` / `version` and every `$`-built-in stay ordinary keys as before.
+
 > **Migration note (0.5.0):** previously an unquoted `a.b:'x'` matched a flat attribute named `a.b`. It is now a path — add quotes to keep the old meaning. The search-bar autocomplete inserts dotted flat keys pre-quoted.
 
 Two storage-driven caveats: path filters never match **encrypted** attributes (the ciphertext can't be traversed — so negated path filters *do* match them), and never match attributes whose JSON exceeds 2 000 bytes (routed to unindexed blob storage, same as flat filters).

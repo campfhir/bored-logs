@@ -73,17 +73,37 @@ export type PathSegment =
 export type AttrPath = { base: string; segments: PathSegment[] };
 
 /**
- * Parse a query key into an attribute path: `base ( '.' member | '[' (digits | '*') ']' )*`.
- * Returns `null` when the key contains no path syntax at all, and also for
- * malformed paths (`a[`, `a..b`, `a[x]`) — a null result means "treat as a
- * flat attribute name", which keeps odd flat keys working as before.
+ * Characters that make a key a NON-path (a plain flat name). These are the
+ * query grammar's operator/quoting characters — a `base`/`member` may not
+ * contain them. JSON itself allows any string as a property name, but the
+ * unquoted path grammar is stricter by necessity: a path segment carrying an
+ * operator character (e.g. `c1.|=` → member `|=`) both reads as gibberish and
+ * cannot round-trip (formatToken would force-quote the key, flipping it to a
+ * literal flat name). Such keys fall through to a flat lookup, which is exact
+ * and round-trips cleanly. Whitespace and `:` can't reach here (they end a
+ * bare key) but are listed for clarity.
+ */
+const NON_PATH_SEGMENT_CHAR = /[\s:'"=<>!\\|&(),]/;
+
+/** A valid path segment name: non-empty and free of operator/quoting characters. */
+function isValidSegmentName(name: string): boolean {
+  return name.length > 0 && !NON_PATH_SEGMENT_CHAR.test(name);
+}
+
+/**
+ * Parse a query key into an attribute path: `base ( '.' member | '[' (digits | '*') ']' )*`,
+ * where `base`/`member` are field-name identifiers (no grammar-operator
+ * characters — see {@link NON_PATH_SEGMENT_CHAR}). Returns `null` when the key
+ * has no path syntax, is malformed (`a[`, `a..b`, `a[x]`), or has an
+ * operator-laden segment (`c1.|=`) — a null result means "treat as a flat
+ * attribute name".
  */
 export function parseAttrPath(key: string): AttrPath | null {
   if (!/[.[]/.test(key)) return null;
 
   // base: everything before the first '.' or '['
   const baseMatch = /^[^.[\]]+/.exec(key);
-  if (!baseMatch) return null;
+  if (!baseMatch || !isValidSegmentName(baseMatch[0])) return null;
   const base = baseMatch[0];
   const segments: PathSegment[] = [];
   let i = base.length;
@@ -91,7 +111,7 @@ export function parseAttrPath(key: string): AttrPath | null {
   while (i < key.length) {
     if (key[i] === ".") {
       const m = /^[^.[\]]+/.exec(key.slice(i + 1));
-      if (!m) return null; // trailing dot or empty member (`a..b`, `a.`)
+      if (!m || !isValidSegmentName(m[0])) return null; // trailing dot / empty / operator-laden member
       segments.push({ type: "member", name: m[0] });
       i += 1 + m[0].length;
     } else if (key[i] === "[") {

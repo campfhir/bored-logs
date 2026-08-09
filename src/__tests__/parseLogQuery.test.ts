@@ -671,3 +671,28 @@ describe("formatToken / parse symmetry (fuzz regressions)", () => {
     expect(parseLogQuery("'a.b':'v'")[0]).toMatchObject({ literalKey: true });
   });
 });
+
+describe("parseAttrPath — operator-laden segments are not paths", () => {
+  it("treats identifier segments as paths (letters, digits, _, -, $, @, /)", () => {
+    for (const key of ["session.id", "a.b.c", "user-agent.v", "$meta.x", "a.b/c", "x@y.z"]) {
+      expect(parseAttrPath(key), key).not.toBeNull();
+    }
+    expect(parseAttrPath("users[*].sku")).not.toBeNull();
+  });
+
+  it("rejects segments containing grammar-operator characters → flat key", () => {
+    // A property CAN be named "|=" in JSON, but the unquoted path grammar
+    // rejects operator characters — the key is treated as a flat name.
+    for (const key of ["c1.|=", "a.b<c", "a.b=c", "a.b!c", "a.b|c", "a.b&c", "a.b'c", 'a.b"c', "a.b\\c"]) {
+      expect(parseAttrPath(key), key).toBeNull();
+    }
+  });
+
+  it("operator-laden keys round-trip as flat names", () => {
+    for (const key of ["c1.|=", "a.b<c", "weird=key"]) {
+      const token = parseLogQuery(formatToken({ key, operator: "=", value: "v" }))[0];
+      expect(token.key).toBe(key);
+      expect(token).not.toHaveProperty("literalKey"); // flat, not a path
+    }
+  });
+});
