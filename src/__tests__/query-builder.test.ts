@@ -221,3 +221,17 @@ describe("::string cast", () => {
     expect(() => where("$timestamp").gt("2003-01-02", { cast: "string" })).toThrowError(TypeError);
   });
 });
+
+describe("$level severity ranges", () => {
+  it("builds range tokens on $level (compiled as severity thresholds)", () => {
+    expect(where("$level").gte("error").build()).toEqual(q(f("$level", ">=", "error")));
+    expect(where("$level").lt("info").build()).toEqual(q(f("$level", "<", "info")));
+  });
+
+  it("round-trips through the string grammar", () => {
+    const b = where("$level").gte("error").or(where("service").eq("db"));
+    const reparsed = parseLogQueryExpr(b.toQueryString());
+    expect(reparsed.ok).toBe(true);
+    if (reparsed.ok) expect(reparsed.val).toEqual(b.build());
+  });
+});

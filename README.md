@@ -1024,7 +1024,7 @@ Three `$`-prefixed keys map to real columns on the `logs` table instead of store
 | ------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `$message` / `$msg`       | `logs.message`       | `LIKE` contains. Bare free text (`payment failed`) is shorthand for this                                    |
 | `$timestamp`              | `logs.logged_timestamp` | Compared as a proper timestamp. Accepts ISO/RFC date or date-time strings — e.g. `$timestamp:>'2003-01-02'`, `$timestamp:<='2024-06-01T12:00:00Z'`. A bare date with `:` / `:=` (`$timestamp:'2003-01-02'`) matches the whole calendar day. Unparseable values are a parse error. |
-| `$level`                  | `logs.level`         | Case-insensitive exact match (`$level:'error'` ≡ `$level:='error'`); `$level:` contains for partial names. Not an ordered scale, so `>`/`<` are treated as exact match — use the `minLevel` query option for severity thresholds. |
+| `$level`                  | `logs.level`         | Case-insensitive: `$level:='error'` exact, `$level:'err'` contains. Range operators compare **severity**: `$level:>='error'` = error or more severe (like the `minLevel` option), `$level:<='info'` = info or more verbose, `>`/`<` strict. Custom levels participate by rank; an unknown name with a range operator returns `Err("invalid log level")`. Level *sets* are just ORs: `$level:='warn' \|\| $level:='debug'`. |
 
 Any other key — `$`-less, or `$application` / `$version`, which are stored as ordinary attributes — is an attribute lookup against `log_attr`.
 
@@ -1096,7 +1096,7 @@ isUnsatisfiable(expr);      // true → the whole query can never match, reject 
 
 `findContradictions` reasons over the DNF, so `||` operands are treated as alternatives — a contradiction in one branch doesn't flag the other.
 
-> **Filtering by level:** a `$level:` term matches the real `logs.level` column (see [Built-in fields](#built-in-fields)), but it's an exact-match — for **severity thresholds** ("warn and above") use the dedicated `level` / `levels` / `minLevel` query options (see [`LogLevelFilter`](#loglevelfilter)), which expand to a level set.
+> **Filtering by level:** a `$level:` term matches the real `logs.level` column (see [Built-in fields](#built-in-fields)). Severity thresholds work right in the query string — `$level:>='warn'` is "warn and above" — or via the `level` / `levels` / `minLevel` query options (see [`LogLevelFilter`](#loglevelfilter)).
 
 The flat `parseLogQuery` tokenizer remains for simple AND-only cases — fold its tokens into an `and` tree to pass as `attributeFilter`:
 

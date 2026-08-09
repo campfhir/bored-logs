@@ -91,7 +91,9 @@ beforeAll(async () => {
       { cause },
     );
   }
-  adapter = new PostgresAdapter({ db });
+  // level "debug": let every seeded row through the write gate — several
+  // suites seed below-info rows (e.g. the $level severity-range tests).
+  adapter = new PostgresAdapter({ db, level: "debug" });
   await adapter.migrate();
 });
 
@@ -742,5 +744,40 @@ describe("PostgresAdapter e2e — ::string cast coerces typed values to text", (
     expect(await search("arr[*]:>'5'")).toEqual(["nested"]);
     // lexical: 'banana' < 'z'; numeric 9 excluded from string compare
     expect(await search("arr[*]:<'z'::string")).toEqual(["nested"]);
+  });
+});
+
+describe("PostgresAdapter e2e — $level severity ranges", () => {
+  beforeEach(async () => {
+    await seed(
+      rec("critical", "db down", {}),
+      rec("error", "boom", {}),
+      rec("warn", "careful", {}),
+      rec("info", "hello", {}),
+      rec("debug", "noise", {}),
+    );
+  });
+
+  it("$level:>= selects the level and more severe", async () => {
+    expect(await search("$level:>='error'")).toEqual(["boom", "db down"]);
+    expect(await search("$level:>='warn'")).toEqual(["boom", "careful", "db down"]);
+  });
+
+  it("$level:> and $level:< are strict", async () => {
+    expect(await search("$level:>'error'")).toEqual(["db down"]);
+    expect(await search("$level:<'info'")).toEqual(["noise"]);
+  });
+
+  it("$level:<= selects the level and more verbose", async () => {
+    expect(await search("$level:<='info'")).toEqual(["hello", "noise"]);
+  });
+
+  it("composes with attributes and OR", async () => {
+    await seed(rec("info", "db op", { service: "db" }));
+    expect(await search("service:'db' || $level:>='critical'")).toEqual(["db down", "db op"]);
+  });
+
+  it("level sets are just ORs of exact matches", async () => {
+    expect(await search("$level:='warn' || $level:='debug'")).toEqual(["careful", "noise"]);
   });
 });

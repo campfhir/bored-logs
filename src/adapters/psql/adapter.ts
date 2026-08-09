@@ -518,15 +518,40 @@ function buildTimestampLeaf(
   return negated ? eb.not(predicate) : predicate;
 }
 
-/** A `level:` leaf → a comparison against the logs.level column (stored uppercased). */
+/**
+ * A `$level:` leaf → a comparison against the logs.level column (stored
+ * uppercased). Range operators compare in SEVERITY space — `$level:>='error'`
+ * means "error or MORE severe" — which is the inverse of the rank numbers
+ * (lower rank = more severe), expanded to a set membership over every
+ * registered level at qualifying ranks.
+ */
 function buildLevelLeaf(
   eb: ExpressionBuilder<any, any>,
   token: LogQueryToken,
+  levels: Record<string, number>,
 ): Expression<SqlBool> {
   const { operator, value, negated } = token;
   const upper = value.toUpperCase();
-  // Level is set membership, not an ordered scale, so any comparison operator
-  // other than `contains` is treated as an exact (case-insensitive) match.
+
+  if (operator === ">" || operator === ">=" || operator === "<" || operator === "<=") {
+    // Unknown names are rejected in query() before compilation reaches here.
+    const threshold = levels[value.toLowerCase()];
+    const names = Object.entries(levels)
+      .filter(([, rank]) =>
+        operator === ">="
+          ? rank <= threshold // this severity and more severe
+          : operator === ">"
+            ? rank < threshold // strictly more severe
+            : operator === "<="
+              ? rank >= threshold // this severity and more verbose
+              : rank > threshold, // strictly more verbose
+      )
+      .map(([name]) => name.toUpperCase());
+    // A range past the scale's end selects nothing (e.g. more severe than rank 0).
+    if (names.length === 0) return sql<boolean>`false`;
+    return eb("logs.level", "in", names);
+  }
+
   const predicate =
     operator === "contains"
       ? eb("logs.level", "like", `%${upper}%`)
@@ -591,12 +616,13 @@ function purgeRowToInternal(row: PurgeJobRow): InternalPurgeJob {
 function buildLeaf(
   eb: ExpressionBuilder<any, any>,
   token: LogQueryToken,
+  levels: Record<string, number>,
 ): Expression<SqlBool> {
   if (isMessageKey(token.key)) {
     return eb("logs.message", token.negated ? "not like" : "like", `%${token.value}%`);
   }
   if (isTimestampKey(token.key)) return buildTimestampLeaf(eb, token);
-  if (isLevelKey(token.key)) return buildLevelLeaf(eb, token);
+  if (isLevelKey(token.key)) return buildLevelLeaf(eb, token, levels);
   // A bare dotted/bracketed key is a path into a JSON attribute; a quoted key
   // (literalKey) — or a malformed path — stays a flat val_name lookup.
   const path = token.literalKey ? null : parseAttrPath(token.key);
@@ -615,10 +641,22 @@ function buildLeaf(
 function buildFilterExpr(
   eb: ExpressionBuilder<any, any>,
   node: FilterExpr,
+  levels: Record<string, number>,
 ): Expression<SqlBool> {
-  if (node.type === "filter") return buildLeaf(eb, node.filter);
-  const children = node.nodes.map((n) => buildFilterExpr(eb, n));
+  if (node.type === "filter") return buildLeaf(eb, node.filter, levels);
+  const children = node.nodes.map((n) => buildFilterExpr(eb, n, levels));
   return node.type === "and" ? eb.and(children) : eb.or(children);
+}
+
+/** Level names referenced by `$level` RANGE leaves — a rank lookup needs a known name. */
+function collectLevelRangeNames(node: FilterExpr): string[] {
+  if (node.type === "filter") {
+    const t = node.filter;
+    return isLevelKey(t.key) && t.operator !== "=" && t.operator !== "contains"
+      ? [t.value]
+      : [];
+  }
+  return node.nodes.flatMap(collectLevelRangeNames);
 }
 
 // ---------------------------------------------------------------------------
@@ -913,6 +951,9 @@ export class PostgresAdapter implements QueryableLogAdapter {
         ...(options.level ? [options.level] : []),
         ...(options.levels ?? []),
         ...(options.minLevel ? [options.minLevel] : []),
+        // `$level` range leaves in the filter tree need a rank lookup, so an
+        // unknown name is rejected exactly like the options above.
+        ...(options.attributeFilter ? collectLevelRangeNames(options.attributeFilter) : []),
       ].filter((l) => !isKnownLevel(l));
       if (invalidLevels.length > 0) {
         return {
@@ -1823,7 +1864,7 @@ export class PostgresAdapter implements QueryableLogAdapter {
         .where("logs.logged_timestamp", "<", end)
         .$if(msg !== "", (qb) => qb.where("logs.message", "like", `%${msg}%`))
         .$if(opts.attributeFilter != null, (qb) =>
-          qb.where((eb) => buildFilterExpr(eb, opts.attributeFilter!)),
+          qb.where((eb) => buildFilterExpr(eb, opts.attributeFilter!, this._levels)),
         )
         .where("logs.level", "in", logLevels)
         .orderBy("logs.logged_timestamp", sort)

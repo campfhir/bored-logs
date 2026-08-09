@@ -197,6 +197,7 @@ export function LogSearchSyntaxHelp({ className }: { className?: string }): Reac
         <dt>'key.with.dot':'v'</dt> <dd>quoted = literal flat key, not a path</dd>
         <dt>key:=null</dt>      <dd>null literal (quote 'null' for the string)</dd>
         <dt>key:&gt;'v'::string</dt> <dd>force text comparison (numbers/dates coerce)</dd>
+        <dt>$level:&gt;='warn'</dt> <dd>severity threshold (this level and more severe)</dd>
         <dt>a b / a &amp;&amp; b</dt> <dd>and</dd>
         <dt>a || b</dt>         <dd>or (binds tighter than and)</dd>
         <dt>(a b) || c</dt>     <dd>grouping</dd>

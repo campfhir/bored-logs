@@ -680,3 +680,103 @@ describe("PostgresAdapter.query — ::string cast", () => {
     expect(q.sql).not.toMatch(/jsonb_path_exists/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// $level range operators — severity thresholds in the query grammar.
+// $level:>='error' means "error or MORE severe" (severity space, not rank
+// space: rank is inverted, lower rank = more severe).
+// ---------------------------------------------------------------------------
+
+describe("PostgresAdapter.query — $level severity ranges", () => {
+  let adapter: PostgresAdapter;
+  let compiled: CompiledQuery[];
+
+  beforeEach(() => {
+    const cap = makeCapturingDb();
+    compiled = cap.compiled;
+    adapter = new PostgresAdapter({ db: cap.db });
+  });
+
+  afterEach(async () => {
+    await adapter.close();
+  });
+
+  async function mainQuery(query: string): Promise<CompiledQuery> {
+    const parsed = parseLogQueryExpr(query);
+    if (!parsed.ok) throw parsed.err;
+    await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    const q = compiled.find((c) => /"level" in \(/.test(c.sql));
+    if (!q) throw new Error("no main query was compiled");
+    return q;
+  }
+
+  /** Level names bound inside the tree's IN clause (excludes the outer gate's full set). */
+  function treeLevelSet(q: CompiledQuery): string[] {
+    // The outer level gate binds EVERY level; the tree leaf binds a subset.
+    // Count occurrences: names bound twice are in both; once-bound full-set
+    // names are the gate. Simpler: the tree set = names whose count is 2.
+    const strs = q.parameters.filter((p): p is string => typeof p === "string");
+    const counts = new Map<string, number>();
+    for (const s of strs) counts.set(s, (counts.get(s) ?? 0) + 1);
+    return [...counts.entries()].filter(([, n]) => n >= 2).map(([s]) => s).sort();
+  }
+
+  it("compiles $level:>= to the level and everything MORE severe", async () => {
+    const q = await mainQuery("$level:>='error'");
+    expect(q.sql.match(/"logs"\."level" in \(/g)!.length).toBeGreaterThanOrEqual(2);
+    expect(treeLevelSet(q)).toEqual(["CRITICAL", "ERROR", "SILENT"]);
+  });
+
+  it("compiles $level:> to strictly more severe", async () => {
+    const q = await mainQuery("$level:>'warn'");
+    expect(treeLevelSet(q)).toEqual(["CRITICAL", "ERROR", "SILENT"]);
+  });
+
+  it("compiles $level:<= to the level and everything more verbose", async () => {
+    const q = await mainQuery("$level:<='sql'");
+    expect(treeLevelSet(q)).toEqual(["DEBUG", "SQL"]);
+  });
+
+  it("compiles $level:< to strictly more verbose", async () => {
+    const q = await mainQuery("$level:<'sql'");
+    expect(treeLevelSet(q)).toEqual(["DEBUG"]);
+  });
+
+  it("composes severity ranges inside OR branches", async () => {
+    const q = await mainQuery("service:'db' || $level:>='error'");
+    expect(q.sql).toMatch(/exists \(select/);
+    expect(q.sql).toMatch(/ or /);
+  });
+
+  it("keeps exact and contains semantics unchanged", async () => {
+    const exact = await mainQuery("$level:='error'");
+    expect(exact.sql).toMatch(/"logs"\."level" = \$\d+/);
+    await mainQuery("$level:'err'");
+    // Two queries ran in this test; take the LAST compiled main query.
+    const contains = compiled.filter((c) => /"level" in \(/.test(c.sql)).at(-1)!;
+    expect(contains.sql).toMatch(/"logs"\."level" like \$\d+/);
+  });
+
+  it("includes custom levels at qualifying ranks", async () => {
+    adapter.setLevels({ audit: 1 }); // same severity rank as error
+    const q = await mainQuery("$level:>='error'");
+    expect(treeLevelSet(q)).toEqual(["AUDIT", "CRITICAL", "ERROR", "SILENT"]);
+  });
+
+  it("is case-insensitive about the level name", async () => {
+    const q = await mainQuery("$level:>='ERROR'");
+    expect(treeLevelSet(q)).toEqual(["CRITICAL", "ERROR", "SILENT"]);
+  });
+
+  it("errors on an unknown level name with a range operator, without compiling SQL", async () => {
+    const parsed = parseLogQueryExpr("$level:>='bogus'");
+    if (!parsed.ok) throw parsed.err;
+    const res = await adapter.query({ attributeFilter: parsed.val ?? undefined });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.err.message).toBe("invalid log level");
+      expect(res.err.cause?.message).toContain("bogus");
+    }
+    expect(compiled.find((c) => /"level" in \(/.test(c.sql))).toBeUndefined();
+  });
+});
