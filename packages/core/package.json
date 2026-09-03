@@ -1,0 +1,35 @@
+{
+  "name": "@campfhir/bored-logs",
+  "version": "0.8.0",
+  "description": "Structured logging core — the adapter-based logger, typed message templates, secure/redact value wrappers, the boolean log-search grammar and programmatic query builder, and the ConsoleAdapter.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  }
+}

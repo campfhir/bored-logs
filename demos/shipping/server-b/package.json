@@ -2,13 +2,15 @@
   "name": "bored-logs-shipping-demo-server",
   "private": true,
   "version": "0.0.0",
-  "description": "App B — the central log server (Node + Express) for the shipping demo.",
+  "description": "App B \u2014 the central log server (Node + Express) for the shipping demo.",
   "type": "module",
   "scripts": {
     "start": "tsx server.ts"
   },
   "dependencies": {
-    "@campfhir/bored-logs": "link:../../..",
+    "@campfhir/bored-logs": "link:../../../packages/core",
+    "@campfhir/bored-logs-psql": "link:../../../packages/psql",
+    "@campfhir/bored-logs-server": "link:../../../packages/server",
     "express": "^4.21.0",
     "kysely": "^0.27.0",
     "pg": "^8.13.0"

@@ -19,8 +19,8 @@ import {
   createLogIngestHandler,
   createLogRegistrationHandler,
   createE2EServerContext,
-} from "@campfhir/bored-logs/server";
-import { PostgresAdapter, createLoggerPool, type LoggerTables } from "@campfhir/bored-logs/adapters/psql";
+} from "@campfhir/bored-logs-server";
+import { PostgresAdapter, createLoggerPool, type LoggerTables } from "@campfhir/bored-logs-psql";
 
 const PORT = Number(process.env.PORT ?? 4600);
 const TOKEN = process.env.LOG_SHIP_TOKEN ?? "demo-secret";
@@ -45,7 +45,7 @@ logger.addAdapter(adapter);
 // `await e2e.exportKeys()` and pass the result back as `keys`.
 // Registrations are PINNED by default (a clientId cannot be re-claimed with
 // a different key), and held in memory here — swap in the durable store with:
-//   import { PsqlE2ERegistrationStore } from "@campfhir/bored-logs/adapters/psql";
+//   import { PsqlE2ERegistrationStore } from "@campfhir/bored-logs-psql";
 //   createE2EServerContext({ store: new PsqlE2ERegistrationStore(db) })
 const e2e = createE2EServerContext();
 

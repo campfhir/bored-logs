@@ -1,0 +1,39 @@
+{
+  "name": "@campfhir/bored-logs-server",
+  "version": "0.8.0",
+  "description": "Log ingest API for @campfhir/bored-logs — a Fetch-shaped handler that receives shipped batches, plus the registration handler and server context for end-to-end shipment encryption.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/server#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "dependencies": {
+    "@campfhir/bored-logs": "workspace:^",
+    "@campfhir/bored-logs-http": "workspace:^"
+  }
+}

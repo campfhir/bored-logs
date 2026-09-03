@@ -2,14 +2,18 @@
   "name": "bored-logs-demo",
   "private": true,
   "version": "0.0.0",
-  "description": "Local full-stack demo for @campfhir/bored-logs — not published.",
+  "description": "Local full-stack demo for the @campfhir/bored-logs packages \u2014 not published.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start -H 0.0.0.0"
   },
   "dependencies": {
-    "@campfhir/bored-logs": "link:../..",
+    "@campfhir/bored-logs": "link:../../packages/core",
+    "@campfhir/bored-logs-client": "link:../../packages/client",
+    "@campfhir/bored-logs-psql": "link:../../packages/psql",
+    "@campfhir/bored-logs-server": "link:../../packages/server",
+    "@campfhir/bored-logs-ui": "link:../../packages/ui",
     "kysely": "^0.27.0",
     "next": "^15.1.0",
     "pg": "^8.13.0",

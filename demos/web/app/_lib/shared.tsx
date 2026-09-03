@@ -13,14 +13,14 @@ import {
   LogLevelFilter,
   LogDateRangePicker,
   PurgeLogsDialog,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 import type {
   SortState,
   ExtraColumn,
   LogDateRange,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 import type { FilterExpr, LogRow } from "@campfhir/bored-logs";
-import { useLogger, useLogShipper, secure, redact } from "@campfhir/bored-logs/client";
+import { useLogger, useLogShipper, secure, redact } from "@campfhir/bored-logs-client";
 import { simulate, search, purge } from "../actions";
 import { SCENARIOS } from "@/lib/scenarios";
 

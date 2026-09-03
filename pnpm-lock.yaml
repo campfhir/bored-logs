@@ -51,6 +51,68 @@ importers:
         specifier: ^3
         version: 3.2.4(@types/node@22.19.15)(jsdom@26.1.0)
 
+  packages/client:
+    dependencies:
+      '@campfhir/bored-logs':
+        specifier: workspace:^
+        version: link:../core
+      '@campfhir/bored-logs-http':
+        specifier: workspace:^
+        version: link:../http
+      react:
+        specifier: '>=19'
+        version: 19.2.4
+
+  packages/core: {}
+
+  packages/http:
+    dependencies:
+      '@campfhir/bored-logs':
+        specifier: workspace:^
+        version: link:../core
+
+  packages/psql:
+    dependencies:
+      '@campfhir/bored-logs':
+        specifier: workspace:^
+        version: link:../core
+      '@campfhir/bored-logs-psql-migration':
+        specifier: workspace:^
+        version: link:../psql-migration
+      '@campfhir/bored-logs-server':
+        specifier: workspace:^
+        version: link:../server
+      kysely:
+        specifier: '>=0.27'
+        version: 0.27.6
+      pg:
+        specifier: '>=8'
+        version: 8.20.0
+
+  packages/psql-migration:
+    dependencies:
+      kysely:
+        specifier: '>=0.27'
+        version: 0.27.6
+
+  packages/server:
+    dependencies:
+      '@campfhir/bored-logs':
+        specifier: workspace:^
+        version: link:../core
+      '@campfhir/bored-logs-http':
+        specifier: workspace:^
+        version: link:../http
+
+  packages/ui:
+    dependencies:
+      '@campfhir/bored-logs':
+        specifier: workspace:^
+        version: link:../core
+      react:
+        specifier: '>=19'
+        version: 19.2.4
+
 packages:
 
   '@adobe/css-tools@4.4.4':

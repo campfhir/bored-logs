@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { workspaceAlias } from "./vitest.alias";
 
 // Live end-to-end tests against a real Postgres. Run with `pnpm test:e2e`
 // after `pnpm db:up` (or point DATABASE_URL at any reachable Postgres).
@@ -7,17 +8,18 @@ import { defineConfig } from "vitest/config";
 // environment (the `pg` driver, real timers, real sockets) rather than jsdom,
 // and a longer timeout for connection + migration.
 export default defineConfig({
+  resolve: { alias: workspaceAlias },
   test: {
     globals: true,
     environment: "node",
-    include: ["src/**/*.e2e.test.ts"],
+    include: ["packages/*/src/**/*.e2e.test.ts"],
     // Run e2e files serially — they share one database and truncate between tests.
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // Live-DB throughput benchmarks — run via `pnpm bench:e2e` (needs `pnpm db:up`).
     benchmark: {
-      include: ["src/**/*.e2e.bench.ts"],
+      include: ["packages/*/src/**/*.e2e.bench.ts"],
     },
   },
 });

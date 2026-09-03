@@ -1,4 +1,4 @@
-import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { createLogIngestHandler } from "@campfhir/bored-logs-server";
 import { ensureBoredLogs } from "@/lib/logger";
 
 // ---------------------------------------------------------------------------

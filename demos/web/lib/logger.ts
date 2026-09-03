@@ -3,7 +3,7 @@ import { ConsoleAdapter, createLogger } from "@campfhir/bored-logs";
 import {
   PostgresAdapter,
   createLoggerPool,
-} from "@campfhir/bored-logs/adapters/psql";
+} from "@campfhir/bored-logs-psql";
 
 // ---------------------------------------------------------------------------
 // A single process-wide logger + Postgres adapter, cached on globalThis so

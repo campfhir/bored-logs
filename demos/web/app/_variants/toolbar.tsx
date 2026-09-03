@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { LogRow } from "@campfhir/bored-logs";
-import { LogSearchSyntaxHelp } from "@campfhir/bored-logs/components";
+import { LogSearchSyntaxHelp } from "@campfhir/bored-logs-ui";
 import {
   useLogQuery,
   SimulatePanel,

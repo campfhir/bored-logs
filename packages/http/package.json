@@ -1,0 +1,38 @@
+{
+  "name": "@campfhir/bored-logs-http",
+  "version": "0.8.0",
+  "description": "Universal HTTP log-shipping adapter for @campfhir/bored-logs — batches records and POSTs them to an ingest endpoint, with opt-in end-to-end encryption. Browser, Node, Deno, and Edge.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/http"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/http#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "dependencies": {
+    "@campfhir/bored-logs": "workspace:^"
+  }
+}

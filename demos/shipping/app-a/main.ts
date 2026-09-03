@@ -10,7 +10,7 @@
  *   ORDERS=100 deno task start
  */
 import { createLogger, ConsoleAdapter, secure, redact } from "@campfhir/bored-logs";
-import { HttpAdapter, generateE2ESigningKeys } from "@campfhir/bored-logs/adapters/http";
+import { HttpAdapter, generateE2ESigningKeys } from "@campfhir/bored-logs-http";
 
 // Persistent signing identity: the log server PINS a clientId to its first
 // signing key, so a stable clientId needs a stable key. Generated once and

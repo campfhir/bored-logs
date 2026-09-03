@@ -29,7 +29,7 @@ cd demos/shipping/app-a
 deno task start                  # processes 20 fake orders, ships, exits
 ```
 
-Both consume the library from `../../../src` (tsconfig `paths` for tsx, an import map + sloppy imports for Deno) under its published name — no build step; the `link:` dependency (→ `dist`) is the fallback.
+Both consume the library packages from `../../../packages/*/src` (tsconfig `paths` for tsx, an import map + sloppy imports for Deno) under their published names (`@campfhir/bored-logs`, `@campfhir/bored-logs-http`, `@campfhir/bored-logs-server`, `@campfhir/bored-logs-psql`) — no build step; the `link:` dependencies (→ `dist`) are the fallback.
 
 ## Poke at the data
 

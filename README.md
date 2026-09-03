@@ -1,13 +1,16 @@
 # @campfhir/bored-logs
 
-Structured PostgreSQL-backed logging for React + Node — an adapter-based logger with typed message templates, a boolean log-search grammar (nested-attribute queries, a programmatic builder), HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations. The examples below use Next.js idioms, but the package is framework-agnostic; see [Using with Vite / React](#using-with-vite--react-non-nextjs) for a plain Vite SPA + Node backend.
+Structured PostgreSQL-backed logging for React + Node — an adapter-based logger with typed message templates, a boolean log-search grammar (nested-attribute queries, a programmatic builder), HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations. It ships as a family of small packages (see [Packages](#packages)) so a log shipper, a central log server, and a dashboard each install only what they use. The examples below use Next.js idioms, but the packages are framework-agnostic; see [Using with Vite / React](#using-with-vite--react-non-nextjs) for a plain Vite SPA + Node backend.
 
 ## Contents
 
-- [Prerequisites](#prerequisites)
+- [Packages](#packages)
+  - [Which packages do I need?](#which-packages-do-i-need)
+  - [Upgrading from 0.7](#upgrading-from-07)
 - [Installation](#installation)
 - [Using with Vite / React (non-Next.js)](#using-with-vite--react-non-nextjs)
 - [Database setup](#database-setup)
+  - [Custom schema and table names](#3-custom-schema-and-table-names)
 - [Setup](#setup)
 - [Using the logger](#using-the-logger)
 - [Global attributes](#global-attributes)
@@ -43,32 +46,77 @@ Structured PostgreSQL-backed logging for React + Node — an adapter-based logge
 
 ---
 
-## Prerequisites
+## Packages
 
-Peer dependencies required in your Next.js application:
+Every package is published to npm and JSR under the same name and version. They share one repository and one release train; install the ones your runtime needs.
 
-```bash
-npm install kysely pg react
-```
+| Package | What it is | Runs in | Depends on | Peer deps |
+| --- | --- | --- | --- | --- |
+| `@campfhir/bored-logs` | The logger: `createLogger`, adapter contracts, `secure()` / `redact()`, the log-search grammar and `where()` builder, `ConsoleAdapter` | anywhere | — | — |
+| `@campfhir/bored-logs-http` | `HttpAdapter` — ships batches to an ingest endpoint; wire types; the end-to-end encryption protocol core | anywhere (`fetch` + WebCrypto) | core | — |
+| `@campfhir/bored-logs-client` | `LoggerProvider` / `useLogger()` / `useLogShipper()` for React apps (`"use client"`) | browser | core, http | `react` |
+| `@campfhir/bored-logs-server` | `createLogIngestHandler`, `createLogRegistrationHandler`, `createE2EServerContext` — the log ingest API | Node, Deno, Bun, Edge | core, http | — |
+| `@campfhir/bored-logs-psql` | `PostgresAdapter` (write, query, purge), `createLoggerPool`, `PsqlE2ERegistrationStore` | Node | core, psql-migration, server | `kysely`, `pg` |
+| `@campfhir/bored-logs-psql-migration` | The migrator: `up()` / `down()`, a Kysely `MigrationProvider`, and the configurable table layout (`schema` / `tablePrefix` / `tables`) | Node | — | `kysely` |
+| `@campfhir/bored-logs-ui` | React components: `LogTable`, `LogCard`, `LogSearchBar`, `LogLevelFilter`, `LogDateRangePicker`, `PurgeLogsDialog` (`"use client"`) | browser | core | `react` |
 
-`pg` and `kysely` are only required if you are using `PostgresAdapter`. They are not loaded in browser or Edge runtimes.
+### Which packages do I need?
+
+| Role | Install |
+| --- | --- |
+| An application that **ships** its logs to a central server (Node / Deno / Edge service) | `@campfhir/bored-logs` `@campfhir/bored-logs-http` |
+| A **React app** that ships browser logs | `@campfhir/bored-logs` `@campfhir/bored-logs-client` |
+| The **central log server** (receives, stores, queries, purges) | `@campfhir/bored-logs` `@campfhir/bored-logs-server` `@campfhir/bored-logs-psql` `@campfhir/bored-logs-psql-migration` + `kysely` `pg` |
+| A **dashboard** that renders and searches stored logs | `@campfhir/bored-logs` `@campfhir/bored-logs-ui` + `react` |
+| A single **Next.js app** doing all of the above | all of them |
+
+Everything that touches Postgres (`-psql`, `-psql-migration`) is Node-only and is never loaded in browser or Edge bundles as long as you import it from server-only modules (see [Setup](#setup)).
+
+### Upgrading from 0.7
+
+`@campfhir/bored-logs` 0.7 was one package with subpath entries. In 0.8 each subpath became its own package; the main entry is unchanged.
+
+| 0.7 import | 0.8 package |
+| --- | --- |
+| `@campfhir/bored-logs` | `@campfhir/bored-logs` (unchanged) |
+| `@campfhir/bored-logs/adapters/http` | `@campfhir/bored-logs-http` |
+| `@campfhir/bored-logs/client` | `@campfhir/bored-logs-client` |
+| `@campfhir/bored-logs/server` | `@campfhir/bored-logs-server` |
+| `@campfhir/bored-logs/adapters/psql` | `@campfhir/bored-logs-psql` |
+| `@campfhir/bored-logs/adapters/psql/migration` | `@campfhir/bored-logs-psql-migration` |
+| `@campfhir/bored-logs/components` | `@campfhir/bored-logs-ui` |
+
+The default database layout is unchanged — existing tables, index names, and migrations continue to work without any option. `@campfhir/bored-logs` no longer lists `react` as a peer dependency; only `-client` and `-ui` do.
 
 ---
 
 ## Installation
 
 ```bash
-npm install @campfhir/bored-logs
+# central log server / Next.js app with Postgres
+npm install @campfhir/bored-logs @campfhir/bored-logs-server @campfhir/bored-logs-psql @campfhir/bored-logs-psql-migration kysely pg
+
+# React UI + browser shipping
+npm install @campfhir/bored-logs-client @campfhir/bored-logs-ui react
+
+# a log-shipping service (any runtime)
+npm install @campfhir/bored-logs @campfhir/bored-logs-http
+# or, on Deno
+deno add jsr:@campfhir/bored-logs jsr:@campfhir/bored-logs-http
 ```
 
-**Next.js only:** add the package to `serverExternalPackages` in your `next.config.ts` so Next.js does not attempt to bundle it through webpack:
+**Next.js only:** add the server-side packages to `serverExternalPackages` in your `next.config.ts` so Next.js does not attempt to bundle them (and the `pg` driver) through webpack:
 
 ```typescript
 // next.config.ts
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@campfhir/bored-logs"],
+  serverExternalPackages: [
+    "@campfhir/bored-logs-psql",
+    "@campfhir/bored-logs-psql-migration",
+    "pg",
+  ],
 };
 
 export default nextConfig;
@@ -82,12 +130,12 @@ On Vite there is no equivalent to configure — see [Using with Vite / React](#u
 
 The rest of this README uses Next.js idioms (`instrumentation.ts`, Route Handlers, Server Actions, `serverExternalPackages`). None of them are required — the package is framework-agnostic. This section maps each concept to a plain **Vite React SPA + your own Node/Bun backend** (Express, Fastify, Hono, etc.). Everything else in the README still applies; only the wiring changes.
 
-**The one rule that makes this work:** the browser bundle must never import `@campfhir/bored-logs/server`, `@campfhir/bored-logs/adapters/psql`, `pg`, or `kysely`. Those run on your backend only. In the browser you use just two entrypoints:
+**The one rule that makes this work:** the browser bundle must never import `@campfhir/bored-logs-server`, `@campfhir/bored-logs-psql`, `pg`, or `kysely`. Those run on your backend only. In the browser you use just two entrypoints:
 
 | Entrypoint                          | Where it runs | What it gives you                                          |
 | ----------------------------------- | ------------- | ---------------------------------------------------------- |
-| `@campfhir/bored-logs/client`       | browser       | `LoggerProvider`, `useLogger` (ships logs over HTTP)       |
-| `@campfhir/bored-logs/components`   | browser       | `LogTable`, `LogSearchBar`, `PurgeLogsDialog`, etc.        |
+| `@campfhir/bored-logs-client`       | browser       | `LoggerProvider`, `useLogger` (ships logs over HTTP)       |
+| `@campfhir/bored-logs-ui`   | browser       | `LogTable`, `LogSearchBar`, `PurgeLogsDialog`, etc.        |
 
 Because you only reference the server entrypoints from backend files, Vite naturally keeps them out of the client bundle — no `serverExternalPackages` analog is needed. (If you run Vite in **SSR** mode, add `ssr: { external: ["@campfhir/bored-logs", "pg", "kysely"] }` to `vite.config.ts` so the server build resolves them from `node_modules` at runtime instead of bundling them.)
 
@@ -107,7 +155,7 @@ Follow [Database setup](#database-setup) and [Setup](#setup) as written — the 
 
 ```typescript
 // server/logger.ts  (backend only)
-import { PostgresAdapter } from "@campfhir/bored-logs/adapters/psql";
+import { PostgresAdapter } from "@campfhir/bored-logs-psql";
 import { logger } from "./lib/logger"; // createLogger({ ... }) as in Setup
 import { db } from "./lib/db";
 
@@ -121,7 +169,7 @@ logger.addAdapter(new PostgresAdapter({ db, level: "info" }));
 
 ```typescript
 import { Hono } from "hono";
-import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { createLogIngestHandler } from "@campfhir/bored-logs-server";
 import { logger } from "./logger";
 
 const ingest = createLogIngestHandler({ logger /* , transform, maxBatch */ });
@@ -159,7 +207,7 @@ Everything from [Client-side logging](#client-side-logging-uselogger) and [UI co
 
 ```tsx
 // src/main.tsx
-import { LoggerProvider } from "@campfhir/bored-logs/client";
+import { LoggerProvider } from "@campfhir/bored-logs-client";
 
 createRoot(document.getElementById("root")!).render(
   <LoggerProvider endpoint="/api/logs" application="web" level="info" credentials="include">
@@ -183,7 +231,7 @@ Use `createLoggerPool` for Azure-friendly connection pool defaults (`max: 2`, sh
 ```typescript
 // src/lib/db.ts
 import { Kysely, PostgresDialect } from "kysely";
-import { createLoggerPool } from "@campfhir/bored-logs/adapters/psql";
+import { createLoggerPool } from "@campfhir/bored-logs-psql";
 
 export const db = new Kysely<any>({
   dialect: new PostgresDialect({
@@ -199,7 +247,7 @@ Or pass your own `pg.Pool` directly if you have one already.
 Call `migrate()` on your `PostgresAdapter` instance once at startup or in a migration script. No tracking table is used — migrations are idempotent (`CREATE TABLE IF NOT EXISTS`) so it is safe to call on every startup.
 
 ```typescript
-import { PostgresAdapter } from "@campfhir/bored-logs/adapters/psql";
+import { PostgresAdapter } from "@campfhir/bored-logs-psql";
 import { db } from "@/lib/db";
 
 const adapter = new PostgresAdapter({ db });
@@ -222,12 +270,12 @@ const status = await adapter.migrationStatus();
 
 #### Running migrations outside the adapter lifecycle
 
-The `adapters/psql/migration` entrypoint exposes every migration directly, so you can run them from a standalone migration script without constructing a `PostgresAdapter`.
+The `@campfhir/bored-logs-psql-migration` package exposes every migration directly, so you can run them from a standalone migration script without constructing a `PostgresAdapter` (it depends only on `kysely`).
 
 The idempotent `up()` / `down()` helpers run **all** migrations (in order / reverse order). No tracking table is used, so they are safe to call on every startup:
 
 ```typescript
-import { up, down } from "@campfhir/bored-logs/adapters/psql/migration";
+import { up, down } from "@campfhir/bored-logs-psql-migration";
 
 await up(db);   // apply every migration, in order
 await down(db); // reverse every migration
@@ -241,13 +289,51 @@ For tracked, versioned migrations, hand the provided `MigrationProvider` to Kyse
 
 ```typescript
 import { Migrator } from "kysely";
-import { migrationProvider } from "@campfhir/bored-logs/adapters/psql/migration";
+import { migrationProvider } from "@campfhir/bored-logs-psql-migration";
 
 const migrator = new Migrator({ db, provider: migrationProvider });
 const { error, results } = await migrator.migrateToLatest();
 ```
 
 The raw `MIGRATIONS` map (keyed by name) and the ordered `migrationNames` array are also exported if you need to compose or introspect them.
+
+### 3. Custom schema and table names
+
+By default the adapter creates `logs`, `log_attr`, `log_attr_blob`, `log_purge_job`, `log_purge_ids`, and `log_e2e_clients` in the connection's `search_path`. When you drop the adapter into an existing database — or run one central log server for many projects — those names can collide with tables you already have. Three options, accepted by `PostgresAdapter`, `up()` / `down()`, `createMigrationProvider()`, and `PsqlE2ERegistrationStore`, move the tables out of the way:
+
+| Option        | Type                              | Default | Description                                                                                                                                     |
+| ------------- | --------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`      | `string`                          | —       | Postgres schema for the log tables. Migration `001_logs` creates it (`CREATE SCHEMA IF NOT EXISTS`); rollback never drops it.                    |
+| `tablePrefix` | `string`                          | `""`    | Prefix prepended to **every** table, index, and constraint name (`"bl_"` → `bl_logs`, `bl_log_timestamp_idx`, `bl_log_purge_ids_pkey`).          |
+| `tables`      | `Partial<Record<LogTableKey, string>>` | —  | Explicit physical name per logical table, applied after the prefix. Index and constraint names are **not** derived from these.                   |
+
+Identifiers must be plain lowercase Postgres names (`/^[a-z_][a-z0-9_]{0,62}$/`); anything else throws at construction time.
+
+```typescript
+import { PostgresAdapter } from "@campfhir/bored-logs-psql";
+
+const adapter = new PostgresAdapter({
+  db,
+  schema: "logging",      // logging.bl_logs, logging.bl_log_attr, …
+  tablePrefix: "bl_",
+});
+await adapter.migrate();   // creates the schema, then the prefixed tables + indexes inside it
+```
+
+Run the migrations standalone with the same options:
+
+```typescript
+import { up, createMigrationProvider } from "@campfhir/bored-logs-psql-migration";
+
+await up(db, { schema: "logging", tablePrefix: "bl_" });
+
+// or, tracked by Kysely's Migrator:
+const migrator = new Migrator({ db, provider: createMigrationProvider({ schema: "logging", tablePrefix: "bl_" }) });
+```
+
+How it works: the adapter and migrations are written against the *logical* names, and a Kysely plugin (`LogSchemaPlugin`, attached by `withLogSchema(db, options)`) rewrites every table identifier — `FROM` / `INTO` / `UPDATE` / `DELETE` targets, `REFERENCES`, `CREATE` / `DROP`, and `sql.table()` inside raw SQL — to the physical name at query-compile time. Your own `Kysely<DB>` type can therefore keep using the logical keys of `LoggerTables`. The plugin is not attached at all for the default layout, so existing installations compile to exactly the SQL they always did. `adapter.schemaNames` exposes the resolved physical names if you need to query the tables yourself.
+
+Two installations that must share a single schema should use different `tablePrefix` values (or different `schema`s): the prefix keeps their index names distinct as well, whereas `tables` alone only renames the tables.
 
 ---
 
@@ -279,7 +365,7 @@ import { db } from "@/lib/db";
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { PostgresAdapter } =
-      await import("@campfhir/bored-logs/adapters/psql");
+      await import("@campfhir/bored-logs-psql");
 
     logger.addAdapter(
       new PostgresAdapter({
@@ -328,8 +414,11 @@ Any **other** key you pass becomes a global attribute, so `createLogger({ commit
 | `purgeLockTtlMs` | `number`                         | `60 000`                               | TTL on a purge job's processing lock (heartbeat-extended); a dead instance's jobs become sweepable after it lapses           |
 | `purgeSweepIntervalMs` | `number`                   | `60 000`                               | Interval between automatic `sweepPurgeJobs()` runs; `0` disables                                                             |
 | `purgeJobRetentionMs`  | `number`                   | `86 400 000` (24 h)                    | How long terminal (completed / failed) purge job rows are kept before the sweep prunes them; `0` keeps them forever          |
+| `schema`         | `string`                         | —                                      | Postgres schema holding the log tables (see [Custom schema and table names](#3-custom-schema-and-table-names))               |
+| `tablePrefix`    | `string`                         | `""`                                   | Prefix for every table, index, and constraint name                                                                            |
+| `tables`         | `Partial<Record<LogTableKey, string>>` | —                                | Explicit physical table names, applied after the prefix                                                                       |
 
-`db` may be typed `Kysely<LoggerTables>` (exported from `@campfhir/bored-logs/adapters/psql`) for full type-safety on the logger tables. `encrypt`/`decrypt` handle **at-rest** attribute encryption in Postgres — distinct from the [end-to-end wire encryption](#end-to-end-payload-encryption) between shipper and server.
+`db` may be typed `Kysely<LoggerTables>` (exported from `@campfhir/bored-logs-psql`) for full type-safety on the logger tables — its keys are the *logical* names regardless of `schema` / `tablePrefix` / `tables`. `encrypt`/`decrypt` handle **at-rest** attribute encryption in Postgres — distinct from the [end-to-end wire encryption](#end-to-end-payload-encryption) between shipper and server.
 
 ### `ConsoleAdapter` options
 
@@ -781,9 +870,9 @@ Client Components run in the browser and can't reach your server logger or the d
 
 Two package entrypoints are involved:
 
-- `@campfhir/bored-logs/client` — `LoggerProvider`, `useLogger` (a `"use client"` module).
-- `@campfhir/bored-logs/adapters/http` — `HttpAdapter`, the universal (browser + Node/Edge) batching HTTP log adapter that does the shipping. Registered for you by `LoggerProvider`, but usable standalone on any logger.
-- `@campfhir/bored-logs/server` — `createLogIngestHandler`, which builds the receiving Route Handler.
+- `@campfhir/bored-logs-client` — `LoggerProvider`, `useLogger` (a `"use client"` module).
+- `@campfhir/bored-logs-http` — `HttpAdapter`, the universal (browser + Node/Edge) batching HTTP log adapter that does the shipping. Registered for you by `LoggerProvider`, but usable standalone on any logger.
+- `@campfhir/bored-logs-server` — `createLogIngestHandler`, which builds the receiving Route Handler.
 
 The ship transport is a plain `POST` of `{ logs: ClientLogRecord[] }` with `content-type: application/json` — a standard `fetch` (with a `sendBeacon` fallback on page unload so in-flight logs aren't lost). Bring your own auth: attach headers or send cookies via the provider options, and enrich or authorize on the server via `transform`.
 
@@ -795,7 +884,7 @@ The ship transport is a plain `POST` of `{ logs: ClientLogRecord[] }` with `cont
 
 ```typescript
 // app/api/logs/route.ts
-import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { createLogIngestHandler } from "@campfhir/bored-logs-server";
 import { logger } from "@/lib/logger";
 import { auth } from "@/lib/auth";
 
@@ -824,7 +913,7 @@ Records arrive already interpolated and timestamped on the client; the handler r
 // app/providers.tsx
 "use client";
 
-import { LoggerProvider } from "@campfhir/bored-logs/client";
+import { LoggerProvider } from "@campfhir/bored-logs-client";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -850,7 +939,7 @@ The provider builds one `Logger` per mount with the console + ship adapters (plu
 ```tsx
 "use client";
 
-import { useLogger } from "@campfhir/bored-logs/client";
+import { useLogger } from "@campfhir/bored-logs-client";
 
 export function CheckoutButton({ cartId }: { cartId: string }) {
   const logger = useLogger();
@@ -941,7 +1030,7 @@ A normal logger with a standalone `HttpAdapter` — no database, no `pg` depende
 ```typescript
 // app-a/src/logger.ts
 import { createLogger, ConsoleAdapter } from "@campfhir/bored-logs";
-import { HttpAdapter } from "@campfhir/bored-logs/adapters/http";
+import { HttpAdapter } from "@campfhir/bored-logs-http";
 
 export const logger = createLogger({
   application: "app-a",          // travels on every record — searchable on the server
@@ -971,7 +1060,7 @@ One ingest endpoint feeding a logger that owns the `PostgresAdapter`. `createLog
 
 ```typescript
 // log-server/app/api/logs/route.ts
-import { createLogIngestHandler } from "@campfhir/bored-logs/server";
+import { createLogIngestHandler } from "@campfhir/bored-logs-server";
 import { logger } from "@/lib/logger"; // createLogger() + PostgresAdapter
 
 const ingest = createLogIngestHandler({
@@ -1045,7 +1134,7 @@ new HttpAdapter({
 // Log server — a shared context feeds both handlers:
 import {
   createE2EServerContext, createLogIngestHandler, createLogRegistrationHandler,
-} from "@campfhir/bored-logs/server";
+} from "@campfhir/bored-logs-server";
 
 const e2e = createE2EServerContext();
 export const POST = createLogIngestHandler({ logger, encryption: { context: e2e } });
@@ -1216,7 +1305,7 @@ import {
   LogDateRangePicker,
   LogSearchSyntaxHelp,
   PurgeLogsDialog,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 import type {
   LogQueryToken,
   SortState,
@@ -1232,7 +1321,7 @@ import type {
   LogDateRangePickerProps,
   LogDateRange,
   QuickRange,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 ```
 
 ### `LogTable`
@@ -1247,9 +1336,9 @@ import {
   LogTable,
   LogTableRow,
   LogTableRowGroup,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 import type { LogRow } from "@campfhir/bored-logs";
-import type { SortState } from "@campfhir/bored-logs/components";
+import type { SortState } from "@campfhir/bored-logs-ui";
 
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogRow[]>([]);
@@ -1344,7 +1433,7 @@ extraColumns={[
 A single log rendered as a card, for narrow / mobile layouts where a table doesn't fit. Fields reuse the same [`ExtraColumn`](#extracolumn) shape as `LogTable`'s `extraColumns`, so one config drives both views. Expand/collapse is built in (click or keyboard on the header), mirroring `LogTableRowGroup`.
 
 ```tsx
-import { LogCard } from "@campfhir/bored-logs/components";
+import { LogCard } from "@campfhir/bored-logs-ui";
 
 // Same column config as the table
 const columns = [
@@ -1376,7 +1465,7 @@ Renders `<article data-log-card data-level="…">` containing a `[data-log-card-
 Boolean search bar with optional autocomplete. Parses the query syntax described in [Log search](#log-search) — including `||` (OR), `&&`/whitespace (AND), and `()` grouping — and emits the parsed `FilterExpr` tree on each commit or removal. Pass it straight to `query({ attributeFilter })`.
 
 ```tsx
-import { LogSearchBar } from "@campfhir/bored-logs/components";
+import { LogSearchBar } from "@campfhir/bored-logs-ui";
 import type { LogRow, FilterExpr } from "@campfhir/bored-logs";
 import { queryLogs } from "@/actions/logs";
 
@@ -1420,7 +1509,7 @@ import { queryLogs } from "@/actions/logs";
 A dedicated, controlled control for the log level — a group of toggle buttons, one per level. Selecting levels produces the array you pass to `query({ levels })`. Style-less like the rest.
 
 ```tsx
-import { LogLevelFilter } from "@campfhir/bored-logs/components";
+import { LogLevelFilter } from "@campfhir/bored-logs-ui";
 import { queryLogs } from "@/actions/logs";
 
 const [levels, setLevels] = useState<string[]>([]);
@@ -1450,8 +1539,8 @@ Renders a `<div role="group" data-log-level-filter>` of `<button>`s. Each button
 A controlled, style-less date-range control. It pairs an explicit start/end range — a separate date and time input per bound, validated so start is on or before end — with configurable quick "last X" presets, and emits ISO-8601 strings ready for `query({ start, end })`. Picking a date defaults its time to the start (`00:00`) or end (`23:59`) of that day, so a date applies on its own without also setting a time (a single `datetime-local` reports nothing until both parts are filled).
 
 ```tsx
-import { LogDateRangePicker } from "@campfhir/bored-logs/components";
-import type { LogDateRange } from "@campfhir/bored-logs/components";
+import { LogDateRangePicker } from "@campfhir/bored-logs-ui";
+import type { LogDateRange } from "@campfhir/bored-logs-ui";
 import { queryLogs } from "@/actions/logs";
 
 const [range, setRange] = useState<LogDateRange>({ start: null, end: null });
@@ -1478,7 +1567,7 @@ const [range, setRange] = useState<LogDateRange>({ start: null, end: null });
 Define your own presets by resolving each option to a concrete range (return `end` as `null`/omitted for an open upper bound):
 
 ```tsx
-import type { QuickRange } from "@campfhir/bored-logs/components";
+import type { QuickRange } from "@campfhir/bored-logs-ui";
 
 const quickRanges: QuickRange[] = [
   { label: "Today", resolve: (now) => ({ start: new Date(now.setHours(0, 0, 0, 0)) }) },
@@ -1493,7 +1582,7 @@ The default presets (`DEFAULT_QUICK_RANGES`) are last 15 min, hour, 24 hours, 7 
 Standalone syntax reference component — place it anywhere in your layout as a tooltip or help text.
 
 ```tsx
-import { LogSearchSyntaxHelp } from "@campfhir/bored-logs/components";
+import { LogSearchSyntaxHelp } from "@campfhir/bored-logs-ui";
 
 <LogSearchSyntaxHelp className="my-tooltip" />;
 ```
@@ -1508,7 +1597,7 @@ A fully controlled purge confirmation dialog. It renders the date picker and Can
 "use client";
 
 import { useState } from "react";
-import { PurgeLogsDialog } from "@campfhir/bored-logs/components";
+import { PurgeLogsDialog } from "@campfhir/bored-logs-ui";
 import { purgeLogs } from "@/actions/logs";
 
 function PurgeButton() {
@@ -1561,9 +1650,9 @@ import {
   LogTable,
   LogTableRowGroup,
   PurgeLogsDialog,
-} from "@campfhir/bored-logs/components";
+} from "@campfhir/bored-logs-ui";
 import type { LogRow, FilterExpr } from "@campfhir/bored-logs";
-import type { SortState } from "@campfhir/bored-logs/components";
+import type { SortState } from "@campfhir/bored-logs-ui";
 import { purgeLogs, queryLogs } from "@/actions/logs";
 
 export default function LogsPage() {
@@ -1691,9 +1780,16 @@ Safe to call in browser and Edge runtimes — silently ignored when `process` is
 
 ## Development
 
+The repository is a pnpm workspace; each package lives under `packages/<name>` with its own `package.json`, `jsr.json`, and `tsup.config.ts`. Tests and the demos resolve sibling packages to their **source**, so nothing needs building to iterate.
+
 ```bash
-pnpm test        # unit + component suite (jsdom, no database)
+pnpm install
+pnpm test        # unit + component suite across every package (jsdom, no database)
+pnpm typecheck   # tsc over packages/*/src
+pnpm build       # tsup for every package, in dependency order → packages/*/dist
 ```
+
+Publishing: `pnpm publish:npm` publishes every package (pnpm rewrites the `workspace:^` ranges to the released version). For JSR, publish in dependency order — `core` → `http`, `psql-migration` → `server` → `psql` → `client`, `ui` — from each package directory (`npx jsr publish`); each `jsr.json` maps its sibling imports to `jsr:` specifiers.
 
 ### Demo app
 
@@ -1729,7 +1825,7 @@ nothing persisted):
 
 ```bash
 pnpm db:up       # start Postgres and wait until healthy
-pnpm test:e2e    # run the live suite (src/**/*.e2e.test.ts)
+pnpm test:e2e    # run the live suite (packages/*/src/**/*.e2e.test.ts)
 pnpm db:down     # stop and remove it
 ```
 

@@ -1,0 +1,42 @@
+{
+  "name": "@campfhir/bored-logs-client",
+  "version": "0.8.0",
+  "description": "React provider and hooks for @campfhir/bored-logs — LoggerProvider / useLogger ship browser logs to a server ingest endpoint with the same typed template API as the server logger.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/client#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "dependencies": {
+    "@campfhir/bored-logs": "workspace:^",
+    "@campfhir/bored-logs-http": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  }
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { LoggerProvider } from "@campfhir/bored-logs/client";
+import { LoggerProvider } from "@campfhir/bored-logs-client";
 
 // Wraps the app in a client-side Logger that writes to the browser console
 // (ConsoleAdapter, on by default) and ships batched records to /api/logs.

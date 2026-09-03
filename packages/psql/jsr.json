@@ -1,0 +1,27 @@
+{
+  "name": "@campfhir/bored-logs-psql",
+  "version": "0.8.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "@campfhir/bored-logs": "jsr:@campfhir/bored-logs@^0.8.0",
+    "@campfhir/bored-logs-psql-migration": "jsr:@campfhir/bored-logs-psql-migration@^0.8.0",
+    "@campfhir/bored-logs-server": "jsr:@campfhir/bored-logs-server@^0.8.0",
+    "kysely": "npm:kysely@^0.27",
+    "pg": "npm:pg@^8",
+    "kysely/helpers/postgres": "npm:kysely@^0.27/helpers/postgres"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "README.md",
+      "jsr.json",
+      "package.json"
+    ],
+    "exclude": [
+      "src/__tests__"
+    ]
+  }
+}

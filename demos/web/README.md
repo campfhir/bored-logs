@@ -1,13 +1,13 @@
 # bored-logs demo
 
-A local full-stack showcase for **@campfhir/bored-logs** — the Postgres
+A local full-stack showcase for the **@campfhir/bored-logs** packages — the Postgres
 adapter and the React UI components (`LogSearchBar`, `LogTable`,
 `LogSearchSyntaxHelp`, `PurgeLogsDialog`), wired to a real database.
 
 > Not published to npm. It lives in the repo and imports the library under its
-> published name (`@campfhir/bored-logs`), resolved straight to the LOCAL
-> SOURCE in `../../src` via tsconfig path aliases — so `next dev` picks up
-> library changes live, with no build step. (A `link:..` dependency remains as
+> published names (`@campfhir/bored-logs`, `@campfhir/bored-logs-ui`, …), resolved
+> straight to the LOCAL SOURCE in `../../packages/*/src` via tsconfig path aliases — so `next dev` picks up
+> library changes live, with no build step. (`link:../../packages/*` dependencies remain as
 > the fallback for anything that bypasses the aliases.)
 
 ## What it demonstrates
@@ -62,7 +62,7 @@ container.
 
 ## Run it locally
 
-The demo compiles the library from `../../src` directly — no library build needed:
+The demo compiles the library packages from `../../packages/*/src` directly — no library build needed:
 
 ```bash
 # start a Postgres for the demo (reuses the demo compose db service)
@@ -74,7 +74,7 @@ pnpm install --ignore-workspace   # standalone — don't resolve into the repo w
 pnpm dev                      # → http://localhost:3000
 ```
 
-Edits under `../../src` hot-reload in the running demo like any app file.
+Edits under `../../packages/*/src` hot-reload in the running demo like any app file.
 
 `DATABASE_URL` defaults to `postgres://postgres:postgres@localhost:5433/bored_logs_demo`
 (the compose `db` service). Override it to point anywhere:
