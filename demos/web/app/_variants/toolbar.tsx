@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { LogRow } from "@campfhir/bored-logs";
-import { LogSearchSyntaxHelp } from "@campfhir/bored-logs/components";
+import { LogSearchSyntaxHelp } from "@campfhir/bored-logs-ui";
 import {
   useLogQuery,
   SimulatePanel,
@@ -25,7 +25,7 @@ export default function ToolbarVariant({ initialLogs }: { initialLogs: LogRow[] 
     <main className="mx-auto flex h-full max-w-6xl flex-col gap-4 overflow-hidden px-4 py-5 sm:px-6">
       <header className="flex shrink-0 flex-wrap items-end justify-between gap-4">
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Postgres-backed structured logging · live UI components · OR / AND / grouping search
+          Postgres-backed structured logging · seven packages, one demo · own schema + prefix · OR / AND / grouping search
         </p>
         <PurgeControl q={q} />
       </header>

@@ -1,16 +1,22 @@
 {
+  // Repo-wide typecheck (`pnpm typecheck`) and editor config. Sibling packages
+  // resolve to their SOURCE here so nothing needs building first; each
+  // package's own tsconfig.json (used by tsup) deliberately has no `paths`, so
+  // the published .d.ts files reference siblings by package name.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM"],
-    "jsx": "react-jsx",
-    "strict": true,
-    "declaration": true,
-    "declarationMap": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@campfhir/bored-logs": ["packages/core/src/index.ts"],
+      "@campfhir/bored-logs-http": ["packages/http/src/index.ts"],
+      "@campfhir/bored-logs-server": ["packages/server/src/index.ts"],
+      "@campfhir/bored-logs-psql-migration": ["packages/psql-migration/src/index.ts"],
+      "@campfhir/bored-logs-psql": ["packages/psql/src/index.ts"],
+      "@campfhir/bored-logs-client": ["packages/client/src/index.ts"],
+      "@campfhir/bored-logs-ui": ["packages/ui/src/index.ts"]
+    }
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "integration"]
+  "include": ["packages/*/src"],
+  "exclude": ["node_modules", "**/dist", "demos"]
 }

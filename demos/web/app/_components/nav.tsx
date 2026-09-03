@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "../theme-toggle";
+import LoadoutPanel from "./loadout-panel";
 
 // The layout variants. Each is a full-page idea for arranging the same
-// bored-logs components (search, level filter, date range, table/cards).
+// bored-logs UI components (search, level filter, date range, table/cards).
+// The Loadout dropdown (right) lists the packages this demo is built from.
 const VARIANTS = [
   { href: "/", label: "Toolbar", hint: "Filters stacked above the results" },
   { href: "/split", label: "Sidebar", hint: "Filters in a left rail" },
@@ -15,7 +17,7 @@ const VARIANTS = [
 export default function Nav() {
   const pathname = usePathname();
   return (
-    <nav className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-4 py-2 dark:border-slate-800 sm:px-6">
+    <nav className="relative flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 px-4 py-2 dark:border-slate-800 sm:px-6">
       <span className="text-sm font-semibold tracking-tight">
         bored-logs <span className="text-slate-400 dark:text-slate-500">demo</span>
       </span>
@@ -39,7 +41,8 @@ export default function Nav() {
           );
         })}
       </div>
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        <LoadoutPanel />
         <ThemeToggle />
       </div>
     </nav>

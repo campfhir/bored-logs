@@ -5,7 +5,8 @@ import DemoLoggerProvider from "./_components/logger-provider";
 
 export const metadata: Metadata = {
   title: "bored-logs demo",
-  description: "Live demo of @campfhir/bored-logs UI components + Postgres adapter",
+  description:
+    "Live demo of the @campfhir/bored-logs packages — UI components, browser log shipping, and the Postgres adapter in its own schema",
 };
 
 // Set the theme class before paint so there's no light/dark flash on load.

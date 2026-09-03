@@ -1,69 +1,8 @@
 {
-  "name": "@campfhir/bored-logs",
-  "version": "0.7.1",
-  "description": "Structured PostgreSQL-backed logging for React + Node \u2014 adapter-based logger, typed message templates, boolean log search with nested-attribute queries, HTTP log shipping with opt-in end-to-end encryption, React UI components, and Kysely migrations.",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
-    },
-    "./components": {
-      "types": "./dist/components/index.d.ts",
-      "import": "./dist/components/index.mjs",
-      "require": "./dist/components/index.js"
-    },
-    "./client": {
-      "types": "./dist/client/index.d.ts",
-      "import": "./dist/client/index.mjs",
-      "require": "./dist/client/index.js"
-    },
-    "./server": {
-      "types": "./dist/server/index.d.ts",
-      "import": "./dist/server/index.mjs",
-      "require": "./dist/server/index.js"
-    },
-    "./adapters/psql": {
-      "types": "./dist/adapters/psql.d.ts",
-      "import": "./dist/adapters/psql.mjs",
-      "require": "./dist/adapters/psql.js"
-    },
-    "./adapters/http": {
-      "types": "./dist/adapters/http.d.ts",
-      "import": "./dist/adapters/http.mjs",
-      "require": "./dist/adapters/http.js"
-    },
-    "./adapters/psql/migration": {
-      "types": "./dist/adapters/psql/migration.d.ts",
-      "import": "./dist/adapters/psql/migration.mjs",
-      "require": "./dist/adapters/psql/migration.js"
-    }
-  },
-  "typesVersions": {
-    "*": {
-      "components": [
-        "./dist/components/index.d.ts"
-      ],
-      "client": [
-        "./dist/client/index.d.ts"
-      ],
-      "server": [
-        "./dist/server/index.d.ts"
-      ],
-      "adapters/psql": [
-        "./dist/adapters/psql.d.ts"
-      ],
-      "adapters/http": [
-        "./dist/adapters/http.d.ts"
-      ],
-      "adapters/psql/migration": [
-        "./dist/adapters/psql/migration.d.ts"
-      ]
-    }
-  },
+  "name": "bored-logs-monorepo",
+  "private": true,
+  "version": "0.8.0",
+  "description": "Monorepo for the @campfhir/bored-logs packages — structured PostgreSQL-backed logging for React + Node, published as constituent packages under packages/*.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -73,39 +12,21 @@
   "bugs": {
     "url": "https://github.com/campfhir/bored-logs/issues"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "sideEffects": false,
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "rm -rf dist && tsup",
-    "prepublishOnly": "pnpm build",
+    "build": "pnpm -r run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:fuzz": "FUZZ_ITER=8000 vitest run src/__tests__/fuzz.test.ts",
+    "test:fuzz": "FUZZ_ITER=8000 vitest run packages/server/src/__tests__/fuzz.test.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "bench": "vitest bench --run",
     "bench:e2e": "vitest bench --run --config vitest.e2e.config.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
     "demo": "docker compose -f demos/web/compose.yaml up --build",
-    "demo:down": "docker compose -f demos/web/compose.yaml down -v"
-  },
-  "peerDependencies": {
-    "kysely": ">=0.27",
-    "pg": ">=8",
-    "react": ">=19"
-  },
-  "peerDependenciesMeta": {
-    "pg": {
-      "optional": true
-    },
-    "kysely": {
-      "optional": true
-    }
+    "demo:down": "docker compose -f demos/web/compose.yaml down -v",
+    "publish:npm": "pnpm -r publish --access public",
+    "publish:jsr": "pnpm -r --workspace-concurrency=1 exec npx jsr publish"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6",

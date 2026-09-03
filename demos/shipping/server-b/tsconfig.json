@@ -10,13 +10,14 @@
     "skipLibCheck": true,
     "types": ["node"],
     "paths": {
-      // Resolve the library under its published name from the LOCAL SOURCE
-      // three directories up (tsx honours tsconfig paths) — no build step.
-      // The `link:../../..` dependency (→ dist) is the fallback.
-      "@campfhir/bored-logs": ["../../../src/index.ts"],
-      "@campfhir/bored-logs/server": ["../../../src/server/index.ts"],
-      "@campfhir/bored-logs/adapters/psql": ["../../../src/adapters/psql/adapter.ts"],
-      "@campfhir/bored-logs/adapters/psql/migration": ["../../../src/adapters/psql/migration/index.ts"]
+      // Resolve each library package under its published name from the LOCAL
+      // SOURCE in ../../../packages (tsx honours tsconfig paths) — no build
+      // step. The `link:` dependencies (→ dist) are the fallback.
+      "@campfhir/bored-logs": ["../../../packages/core/src/index.ts"],
+      "@campfhir/bored-logs-server": ["../../../packages/server/src/index.ts"],
+      "@campfhir/bored-logs-psql": ["../../../packages/psql/src/index.ts"],
+      "@campfhir/bored-logs-psql-migration": ["../../../packages/psql-migration/src/index.ts"],
+      "@campfhir/bored-logs-http": ["../../../packages/http/src/index.ts"]
     }
   },
   "include": ["*.ts"]

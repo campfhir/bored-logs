@@ -1,0 +1,41 @@
+{
+  "name": "@campfhir/bored-logs-ui",
+  "version": "0.8.0",
+  "description": "React UI components for @campfhir/bored-logs — LogTable, LogCard, LogSearchBar, LogLevelFilter, LogDateRangePicker, and PurgeLogsDialog.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/ui"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/ui#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "dependencies": {
+    "@campfhir/bored-logs": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": ">=19"
+  }
+}

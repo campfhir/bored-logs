@@ -1,0 +1,23 @@
+{
+  "name": "@campfhir/bored-logs-psql-migration",
+  "version": "0.8.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "kysely": "npm:kysely@^0.27",
+    "kysely/helpers/postgres": "npm:kysely@^0.27/helpers/postgres"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "README.md",
+      "jsr.json",
+      "package.json"
+    ],
+    "exclude": [
+      "src/__tests__"
+    ]
+  }
+}

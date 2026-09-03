@@ -1,0 +1,38 @@
+{
+  "name": "@campfhir/bored-logs-psql-migration",
+  "version": "0.8.0",
+  "description": "Kysely migrations for the @campfhir/bored-logs PostgreSQL adapter, with configurable schema, table prefix, and table names.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/psql-migration"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/psql-migration#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "peerDependencies": {
+    "kysely": ">=0.27"
+  }
+}

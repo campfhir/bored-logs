@@ -1,0 +1,44 @@
+{
+  "name": "@campfhir/bored-logs-psql",
+  "version": "0.8.0",
+  "description": "PostgreSQL adapter for @campfhir/bored-logs — batched writes, at-rest attribute encryption, boolean attribute-filter queries with nested JSON paths, and background purges. Kysely + pg.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/campfhir/bored-logs.git",
+    "directory": "packages/psql"
+  },
+  "homepage": "https://github.com/campfhir/bored-logs/tree/main/packages/psql#readme",
+  "bugs": {
+    "url": "https://github.com/campfhir/bored-logs/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup"
+  },
+  "dependencies": {
+    "@campfhir/bored-logs": "workspace:^",
+    "@campfhir/bored-logs-psql-migration": "workspace:^",
+    "@campfhir/bored-logs-server": "workspace:^"
+  },
+  "peerDependencies": {
+    "kysely": ">=0.27",
+    "pg": ">=8"
+  }
+}

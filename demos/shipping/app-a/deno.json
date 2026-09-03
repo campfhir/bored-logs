@@ -7,8 +7,8 @@
     "types": ["npm:@types/node"]
   },
   "imports": {
-    "@campfhir/bored-logs": "../../../src/index.ts",
-    "@campfhir/bored-logs/adapters/http": "../../../src/adapters/http/adapter.ts"
+    "@campfhir/bored-logs": "../../../packages/core/src/index.ts",
+    "@campfhir/bored-logs-http": "../../../packages/http/src/index.ts"
   },
   "tasks": {
     "start": "deno run --allow-net --allow-env --allow-read --allow-write main.ts"

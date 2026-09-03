@@ -1,0 +1,22 @@
+{
+  "name": "@campfhir/bored-logs-http",
+  "version": "0.8.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "imports": {
+    "@campfhir/bored-logs": "jsr:@campfhir/bored-logs@^0.8.0"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "README.md",
+      "jsr.json",
+      "package.json"
+    ],
+    "exclude": [
+      "src/__tests__"
+    ]
+  }
+}
