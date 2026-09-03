@@ -9,8 +9,23 @@ importers:
   .:
     dependencies:
       '@campfhir/bored-logs':
-        specifier: link:../..
-        version: link:../..
+        specifier: link:../../packages/core
+        version: link:../../packages/core
+      '@campfhir/bored-logs-client':
+        specifier: link:../../packages/client
+        version: link:../../packages/client
+      '@campfhir/bored-logs-psql':
+        specifier: link:../../packages/psql
+        version: link:../../packages/psql
+      '@campfhir/bored-logs-psql-migration':
+        specifier: link:../../packages/psql-migration
+        version: link:../../packages/psql-migration
+      '@campfhir/bored-logs-server':
+        specifier: link:../../packages/server
+        version: link:../../packages/server
+      '@campfhir/bored-logs-ui':
+        specifier: link:../../packages/ui
+        version: link:../../packages/ui
       kysely:
         specifier: ^0.27.0
         version: 0.27.6

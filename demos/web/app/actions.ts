@@ -2,8 +2,19 @@
 
 import type { FilterExpr, LogRow, LogLevel } from "@campfhir/bored-logs";
 import { ensureBoredLogs } from "@/lib/logger";
+import { collectLoadout, type Loadout } from "@/lib/loadout";
 import { SCENARIO_BY_ID } from "@/lib/scenarios";
 import { splitLevelTerms } from "@/lib/split-levels";
+
+/**
+ * The demo's loadout: the @campfhir/bored-logs-* packages it is built from,
+ * the Postgres layout (schema · prefix · physical table names) shared by the
+ * migrator and the adapter, and which migrations are applied.
+ */
+export async function loadout(): Promise<Loadout> {
+  const { adapter } = await ensureBoredLogs();
+  return collectLoadout(adapter);
+}
 
 /** Write one scenario's worth of fake logs and flush them to Postgres. */
 export async function simulate(scenarioId: string): Promise<{ count: number }> {

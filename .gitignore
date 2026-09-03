@@ -30,3 +30,4 @@ coverage/
 
 # Demo E2E client identities (generated at first run)
 demos/shipping/app-a/app-a-keys.json
+demos/shipping/server-b/server-b-keys.json

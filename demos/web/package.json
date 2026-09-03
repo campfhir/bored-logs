@@ -12,6 +12,7 @@
     "@campfhir/bored-logs": "link:../../packages/core",
     "@campfhir/bored-logs-client": "link:../../packages/client",
     "@campfhir/bored-logs-psql": "link:../../packages/psql",
+    "@campfhir/bored-logs-psql-migration": "link:../../packages/psql-migration",
     "@campfhir/bored-logs-server": "link:../../packages/server",
     "@campfhir/bored-logs-ui": "link:../../packages/ui",
     "kysely": "^0.27.0",

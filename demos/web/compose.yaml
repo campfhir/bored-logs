@@ -30,6 +30,10 @@ services:
     container_name: bored-logs-demo-web
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/bored_logs_demo
+      # Where the log tables live (see lib/logger.ts). Empty strings select
+      # the default layout: public.logs, public.log_attr, …
+      LOG_SCHEMA: logging
+      LOG_TABLE_PREFIX: demo_
       NODE_ENV: production
     ports:
       - "3000:3000"

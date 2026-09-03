@@ -10,6 +10,7 @@
   "dependencies": {
     "@campfhir/bored-logs": "link:../../../packages/core",
     "@campfhir/bored-logs-psql": "link:../../../packages/psql",
+    "@campfhir/bored-logs-psql-migration": "link:../../../packages/psql-migration",
     "@campfhir/bored-logs-server": "link:../../../packages/server",
     "express": "^4.21.0",
     "kysely": "^0.27.0",
